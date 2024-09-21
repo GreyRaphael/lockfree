@@ -13,6 +13,7 @@ if(BUILD_TESTS)
     # test spsc
     add_executable(spsc_test tests/spsc_test.cpp)
     target_link_libraries(spsc_test PRIVATE doctest::doctest)
+    target_include_directories(spsc_test PRIVATE include)
     add_test(NAME SpscTest COMMAND spsc_test)
 
     # # test spmc
