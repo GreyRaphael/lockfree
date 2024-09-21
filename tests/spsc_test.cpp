@@ -29,3 +29,11 @@ TEST_CASE("testing the factorial function") {
         }
     }};
 }
+
+TEST_CASE("replace modulo operations with bitmasking for faster index wrapping") {
+    constexpr int N = 1024;
+    auto mask = N - 1;
+    for (size_t i = 1020; i < 1040; ++i) {
+        CHECK((i & mask) == (i % N));
+    }
+}
