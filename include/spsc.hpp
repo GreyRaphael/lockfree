@@ -6,7 +6,7 @@
 
 namespace lockfree {
 template <class T, size_t BufSize>
-class LockFreeQueue {
+class SPSC {
     static_assert(BufSize >= 2, "Queue size must be at least 2");
     static_assert((BufSize & (BufSize - 1)) == 0, "Queue size must be a power of 2 for efficient modulo operations");
 
@@ -16,14 +16,14 @@ class LockFreeQueue {
     alignas(64) std::atomic<size_t> read_pos_{0};
 
    public:
-    LockFreeQueue() noexcept = default;
-    ~LockFreeQueue() noexcept = default;
+    SPSC() noexcept = default;
+    ~SPSC() noexcept = default;
 
     // Disable copy and move semantics
-    LockFreeQueue(const LockFreeQueue&) = delete;
-    LockFreeQueue& operator=(const LockFreeQueue&) = delete;
-    LockFreeQueue(LockFreeQueue&&) = delete;
-    LockFreeQueue& operator=(LockFreeQueue&&) = delete;
+    SPSC(const SPSC&) = delete;
+    SPSC& operator=(const SPSC&) = delete;
+    SPSC(SPSC&&) = delete;
+    SPSC& operator=(SPSC&&) = delete;
 
    private:
     template <typename U>
