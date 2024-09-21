@@ -9,6 +9,7 @@ template <class T, size_t BufSize>
 class SPSC {
     static_assert(BufSize >= 2, "Queue size must be at least 2");
     static_assert((BufSize & (BufSize - 1)) == 0, "Queue size must be a power of 2 for efficient modulo operations");
+    static constexpr size_t MASK = BufSize - 1;
 
     std::array<T, BufSize> buffer_{};
     // Align write_pos and read_pos to separate cache lines to prevent false sharing
@@ -36,7 +37,7 @@ class SPSC {
         }
 
         // Write data to the buffer
-        buffer_[current_write % BufSize] = std::forward<U>(u);
+        buffer_[current_write & MASK] = std::forward<U>(u);
 
         // Update the writer index with release semantics to ensure
         // that the write to buffer_ happens-before any subsequent reads by consumers
@@ -61,7 +62,7 @@ class SPSC {
         }
 
         // Read the item from the buffer
-        T value = std::move(buffer_[current_read % BufSize]);
+        T value = std::move(buffer_[current_read & MASK]);
 
         // Update the read position
         read_pos_.store(current_read + 1, std::memory_order_release);
