@@ -21,10 +21,11 @@ if(BUILD_TESTS)
     # target_link_libraries(spmc_test PRIVATE doctest::doctest)
     # add_test(NAME SpmcTest COMMAND spmc_test)
 
-    # # test mpsc
-    # add_executable(mpsc_test tests/mpsc_test.cpp)
-    # target_link_libraries(mpsc_test PRIVATE doctest::doctest)
-    # add_test(NAME MpscTest COMMAND mpsc_test)
+    # test mpsc
+    add_executable(mpsc_test tests/mpsc_test.cpp)
+    target_link_libraries(mpsc_test PRIVATE doctest::doctest)
+    target_include_directories(mpsc_test PRIVATE include)
+    add_test(NAME MpscTest COMMAND mpsc_test)
 
     # # test mpmc
     # add_executable(mpmc_test tests/mpmc_test.cpp)
