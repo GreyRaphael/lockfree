@@ -7,7 +7,7 @@
 #include <optional>
 #include <thread>
 
-TEST_CASE("testing the factorial function") {
+TEST_CASE("testing SPSC") {
     lockfree::SPSC<int, 1024> queue;
 
     std::jthread producer{[&queue] {
