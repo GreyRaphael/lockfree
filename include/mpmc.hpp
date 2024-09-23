@@ -122,8 +122,9 @@ class MPMC<T, BufSize, MaxReaderNum, trans::unicast> {
    private:
     template <typename U>
     bool do_push(U&& u) noexcept {
+        size_t current_write;
         while (true) {
-            size_t current_write = write_pos_.load(std::memory_order_relaxed);
+            current_write = write_pos_.load(std::memory_order_relaxed);
             size_t current_read = read_pos_.load(std::memory_order_acquire);
 
             if (current_write - current_read >= BufSize) {
@@ -138,6 +139,8 @@ class MPMC<T, BufSize, MaxReaderNum, trans::unicast> {
                     std::memory_order_relaxed)) {
                 // Successfully reserved the slot, perform the write
                 buffer_[current_write & MASK] = std::forward<U>(u);
+                // Ensure the write to the buffer happens before any subsequent reads
+                std::atomic_thread_fence(std::memory_order_release);
                 return true;
             }
             // If compare_exchange_weak fails, another producer has updated write_pos_, retry
@@ -155,11 +158,10 @@ class MPMC<T, BufSize, MaxReaderNum, trans::unicast> {
     // Pop method
     std::optional<T> pop() noexcept {
         size_t current_read;
-        size_t current_write;
         // Attempt to claim the next item in the buffer
         while (true) {
             current_read = read_pos_.load(std::memory_order_relaxed);
-            current_write = write_pos_.load(std::memory_order_acquire);
+            size_t current_write = write_pos_.load(std::memory_order_acquire);
             if (current_read >= current_write) {
                 return std::nullopt;  // Queue is empty
             }
@@ -171,6 +173,8 @@ class MPMC<T, BufSize, MaxReaderNum, trans::unicast> {
                     std::memory_order_relaxed)) {
                 // Beat other consumers to  Successfully claimed the item at current_read
                 T item = std::move(buffer_[current_read & MASK]);
+                // Ensure that the read from the buffer happens after the load
+                std::atomic_thread_fence(std::memory_order_acquire);
                 return item;
             }
             std::this_thread::yield();
