@@ -16,10 +16,11 @@ if(BUILD_TESTS)
     target_include_directories(spsc_test PRIVATE include)
     add_test(NAME SpscTest COMMAND spsc_test)
 
-    # # test spmc
-    # add_executable(spmc_test tests/spmc_test.cpp)
-    # target_link_libraries(spmc_test PRIVATE doctest::doctest)
-    # add_test(NAME SpmcTest COMMAND spmc_test)
+    # test spmc
+    add_executable(spmc_test tests/spmc_test.cpp)
+    target_link_libraries(spmc_test PRIVATE doctest::doctest)
+    target_include_directories(spmc_test PRIVATE include)
+    add_test(NAME SpmcTest COMMAND spmc_test)
 
     # test mpsc
     add_executable(mpsc_test tests/mpsc_test.cpp)
