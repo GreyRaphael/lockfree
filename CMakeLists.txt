@@ -28,8 +28,9 @@ if(BUILD_TESTS)
     target_include_directories(mpsc_test PRIVATE include)
     add_test(NAME MpscTest COMMAND mpsc_test)
 
-    # # test mpmc
-    # add_executable(mpmc_test tests/mpmc_test.cpp)
-    # target_link_libraries(mpmc_test PRIVATE doctest::doctest)
-    # add_test(NAME MpmcTest COMMAND mpmc_test)
+    # test mpmc
+    add_executable(mpmc_test tests/mpmc_test.cpp)
+    target_link_libraries(mpmc_test PRIVATE doctest::doctest)
+    target_include_directories(mpmc_test PRIVATE include)
+    add_test(NAME MpmcTest COMMAND mpmc_test)
 endif()

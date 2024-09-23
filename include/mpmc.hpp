@@ -41,29 +41,36 @@ class MPMC<T, BufSize, MaxReaderNum, trans::broadcast> {
    private:
     template <typename U>
     bool do_push(U&& u) noexcept {
-        // Get the minimum reader index to determine how much the buffer has been consumed
-        size_t min_reader_index = std::numeric_limits<size_t>::max();  // SIZE_MAX
-        for (size_t i = 0; i < MaxReaderNum; ++i) {
-            size_t reader_index = read_positions_[i].load(std::memory_order_acquire);
-            if (reader_index < min_reader_index) {
-                min_reader_index = reader_index;
+        while (true) {
+            size_t current_write = write_pos_.load(std::memory_order_relaxed);
+
+            // Get the minimum reader index to determine how much the buffer has been consumed
+            size_t min_reader_index = std::numeric_limits<size_t>::max();  // SIZE_MAX
+            for (size_t i = 0; i < MaxReaderNum; ++i) {
+                size_t reader_index = read_positions_[i].load(std::memory_order_acquire);
+                if (reader_index < min_reader_index) {
+                    min_reader_index = reader_index;
+                }
             }
+
+            if (current_write - min_reader_index >= BufSize) {
+                return false;  // Queue is full
+            }
+
+            // Attempt to reserve the current_write position
+            if (write_pos_.compare_exchange_weak(
+                    current_write,
+                    current_write + 1,
+                    std::memory_order_acq_rel,
+                    std::memory_order_relaxed)) {
+                // Successfully reserved the slot, perform the write
+                buffer_[current_write & MASK] = std::forward<U>(u);
+                return true;
+            }
+            // If compare_exchange_weak fails, another producer has updated write_pos_, retry
+            // Optional: Add a pause or yield to reduce contention
+            std::this_thread::yield();
         }
-
-        size_t current_write = write_pos_.load(std::memory_order_relaxed);
-
-        if (current_write - min_reader_index >= BufSize) {
-            return false;  // Queue is full
-        }
-
-        // Write data to the buffer
-        buffer_[current_write & MASK] = std::forward<U>(u);
-
-        // Update the writer index with release semantics to ensure
-        // that the write to buffer_ happens-before any subsequent reads by consumers
-        write_pos_.store(current_write + 1, std::memory_order_release);
-
-        return true;
     }
 
    public:
