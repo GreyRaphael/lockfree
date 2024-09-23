@@ -33,4 +33,10 @@ if(BUILD_TESTS)
     target_link_libraries(mpmc_test PRIVATE doctest::doctest)
     target_include_directories(mpmc_test PRIVATE include)
     add_test(NAME MpmcTest COMMAND mpmc_test)
+
+    # test threadpool
+    add_executable(threadpool_test tests/threadpool_test.cpp)
+    target_link_libraries(threadpool_test PRIVATE doctest::doctest)
+    target_include_directories(threadpool_test PRIVATE include)
+    add_test(NAME ThreadPoolTest COMMAND threadpool_test)
 endif()
