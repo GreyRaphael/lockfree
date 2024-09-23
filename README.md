@@ -27,3 +27,7 @@ Avoiding std::optional in pop():
 
 Exception Safety:
 - The class is marked noexcept where appropriate, ensuring that it doesn't throw exceptions, which is crucial for lock-free data structures.
+
+## lockfree threadpool
+
+idea: 管理一个任务队列(lockfree)，一个线程队列(`std::array<std::jthread, N>`)，然后每次取一个任务分配给一个线程去做，循环往复。
