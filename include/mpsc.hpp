@@ -7,7 +7,7 @@
 
 namespace lockfree {
 
-template <class T, size_t BufSize>
+template <typename T, size_t BufSize>
 class MPSC {
     static_assert(BufSize >= 2, "Queue size must be at least 2");
     static_assert((BufSize & (BufSize - 1)) == 0, "Queue size must be a power of 2 for efficient modulo operations");
