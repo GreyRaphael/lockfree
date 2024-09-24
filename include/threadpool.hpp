@@ -7,7 +7,7 @@
 #include <thread>
 
 #include "def.hpp"
-#include "mpmc.hpp"
+#include "queue/mpmc.hpp"
 
 // Define Task as a type-erased callable
 using Task = std::function<void()>;

@@ -1,5 +1,5 @@
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
-#include "spsc.hpp"
+#include "queue/spsc.hpp"
 
 #include <doctest/doctest.h>
 
