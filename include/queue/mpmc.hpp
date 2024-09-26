@@ -104,7 +104,10 @@ class MPMC<T, BufSize, MaxReaderNum, trans::unicast> {
     static_assert((BufSize & (BufSize - 1)) == 0, "Queue size must be a power of 2 for efficient modulo operations");
     static constexpr size_t MASK = BufSize - 1;
 
+    // alignas(std::hardware_constructive_interference_size)
+    // Align the buffer to cache lines for better cache performance
     std::array<T, BufSize> buffer_{};
+    // or alignas(std::hardware_destructive_interference_size)
     // Align write_pos and read_pos to separate cache lines to prevent false sharing
     alignas(64) std::atomic<size_t> write_pos_{0};
     alignas(64) std::atomic<size_t> read_pos_{0};
@@ -166,6 +169,9 @@ class MPMC<T, BufSize, MaxReaderNum, trans::unicast> {
                 return std::nullopt;  // Queue is empty
             }
 
+            // Attempt to increment read_pos_ atomically
+            // Use memory_order_acq_rel for successful operations,
+            //  and memory_order_relaxed for failures to minimize overhead.
             if (read_pos_.compare_exchange_weak(
                     current_read,
                     current_read + 1,
