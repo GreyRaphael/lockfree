@@ -31,3 +31,11 @@ Exception Safety:
 ## lockfree threadpool
 
 idea: 管理一个任务队列(lockfree)，一个线程队列(`std::array<std::jthread, N>`)，然后每次取一个任务分配给一个线程去做，循环往复。
+
+## graceful cleanup
+
+Handling graceful cleanup of shared memory upon program termination
+- Global Variables: Use global variables to make shared memory pointers and sizes accessible within signal handlers.
+- Signal Handlers: Implement platform-specific signal handlers to catch termination signals.
+- Registration of Handlers: Register these handlers at the beginning of your main function.
+- Cleanup Logic: Ensure that the shared memory is properly destroyed within the handlers.
