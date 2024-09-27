@@ -5,6 +5,7 @@ set(CMAKE_CXX_STANDARD 20)
 
 # Option to build tests
 option(BUILD_TESTS "Build test programs" ON)
+option(BUILD_EXAMPLES "Build example programs" ON)
 
 if(BUILD_TESTS)
     find_package(doctest CONFIG REQUIRED)
@@ -39,4 +40,12 @@ if(BUILD_TESTS)
     target_link_libraries(threadpool_test PRIVATE doctest::doctest)
     target_include_directories(threadpool_test PRIVATE include)
     add_test(NAME ThreadPoolTest COMMAND threadpool_test)
+endif()
+
+if(BUILD_EXAMPLES)
+    # example shm pub & sub
+    add_executable(shm_pub examples/shm/pub.cpp)
+    target_include_directories(shm_pub PRIVATE include)
+    add_executable(shm_sub examples/shm/sub.cpp)
+    target_include_directories(shm_sub PRIVATE include)
 endif()
