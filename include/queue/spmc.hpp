@@ -85,6 +85,14 @@ class SPMC<T, BufSize, MaxReaderNum, trans::broadcast> {
         read_positions_[consumerId].store(current_read + 1, std::memory_order_release);
         return value;
     }
+
+    size_t get_read_pos(size_t consumerId) noexcept {
+        return read_positions_[consumerId].load(std::memory_order_acquire);
+    }
+
+    void set_read_pos(size_t consumerId, size_t pos) {
+        read_positions_[consumerId].store(pos, std::memory_order_release);
+    }
 };
 
 // Specialization for trans::unicast

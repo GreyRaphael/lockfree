@@ -25,11 +25,12 @@ int main(int argc, char** argv) {
         auto ptr = reinterpret_cast<const MyData*>(msg.data());
         printf("recv: %d %f %s\n", ptr->id, ptr->value, ptr->name);
     };
-    ws.onclose = []() {
+    ws.onclose = [] {
         printf("onclose\n");
     };
 
     ws.open(addr.c_str());
 
     getchar();
+    ws.close();
 }

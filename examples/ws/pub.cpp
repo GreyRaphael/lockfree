@@ -127,15 +127,19 @@ int main(int argc, char** argv) {
         while (true) {
             cm.for_each_client([&queue](WebSocketChannelPtr const& channel, size_t client_id) {
                 std::optional<MyData> value;
+                auto current_pos = queue.get_read_pos(client_id);
                 while (!(value = queue.pop(client_id))) {
                     std::cout << "Queue is empty, consumer " << client_id << " cannot pop.\n";
                     std::this_thread::sleep_for(std::chrono::milliseconds(200));
                 }
 
                 auto ptr = reinterpret_cast<const char*>(&value.value());
-                std::cout<<std::format("send {} begin---------------\n",  value.value().id);
-                channel->send(ptr, sizeof(MyData));
-                std::cout<<std::format("send {} end---------------\n",  value.value().id);
+                std::cout << std::format("send {} begin---------------\n", value.value().id);
+                auto ret = channel->send(ptr, sizeof(MyData));
+                if (ret < 0) {
+                    queue.set_read_pos(client_id, current_pos);
+                }
+                std::cout << std::format("send {} end {}---------------\n", value.value().id, ret);
             });
         }
     }};
