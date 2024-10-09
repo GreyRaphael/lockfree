@@ -48,4 +48,13 @@ if(BUILD_EXAMPLES)
     target_include_directories(shm_pub PRIVATE include)
     add_executable(shm_sub examples/shm/sub.cpp)
     target_include_directories(shm_sub PRIVATE include)
+
+    # example websocket pub & sub
+    find_package(libhv CONFIG REQUIRED)
+    add_executable(ws_pub examples/ws/pub.cpp)
+    target_include_directories(ws_pub PRIVATE include)
+    target_link_libraries(ws_pub PRIVATE hv_static)
+    add_executable(ws_sub examples/ws/sub.cpp)
+    target_include_directories(ws_sub PRIVATE include)
+    target_link_libraries(ws_sub PRIVATE hv_static)
 endif()
