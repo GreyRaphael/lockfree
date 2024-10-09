@@ -14,6 +14,8 @@
 #include <thread>
 #include <unordered_map>
 
+#include "queue/spmc.hpp"
+
 // Thread-safe container for clients
 class ClientManager {
     mutable std::shared_mutex mutex_;
@@ -34,15 +36,21 @@ class ClientManager {
     // Allows safe iteration over clients without copying
     void for_each_client(auto&& func) const {
         std::shared_lock lock(mutex_);
-        for (const auto& [client, _] : channels_) {
-            func(client);
+        for (const auto& [channel, client_id] : channels_) {
+            func(channel, client_id);
         }
     }
 
-    // find client_id in the clients_map_
     size_t retrive_id(std::string const& name) {
         if (clients_map_.contains(name)) {
             return clients_map_[name];
+        }
+        return SIZE_MAX;
+    }
+
+    size_t retrive_id(WebSocketChannelPtr const& channel) {
+        if (channels_.contains(channel)) {
+            return channels_[channel];
         }
         return SIZE_MAX;
     }
@@ -58,6 +66,15 @@ class ClientManager {
         }
     }
 };
+
+struct MyData {
+    int id;
+    double value;
+    char name[16];
+};
+
+#define BUFFER_CAPACITY 128  // Number of entries in the buffer
+#define MAX_READERS 16
 
 int main(int argc, char** argv) {
     std::ifstream fin{"server.json"};
@@ -84,15 +101,42 @@ int main(int argc, char** argv) {
     printf("listening to %s:%d...\n", server.host, server.port);
     server.start();
 
-    std::jthread sender{[&cm] {
-        int i = 0;
+    lockfree::SPMC<MyData, BUFFER_CAPACITY, MAX_READERS, lockfree::trans::broadcast> queue;
+    std::jthread writer{[&queue] {
+        size_t index = 0;
         while (true) {
-            cm.for_each_client([i](WebSocketChannelPtr const& channel) {
-                auto msg = std::format("hello-{}", i);
-                channel->send(msg);
+            MyData myData;
+            myData.id = index;
+            myData.value = index * 0.1;
+            snprintf(myData.name, sizeof(myData.name), "Data%zu", index);
+
+            // Attempt to push data into the ring buffer
+            while (!queue.push(myData)) {
+                std::cout << "Queue is full, cannot push. Retrying...\n";
+                std::this_thread::sleep_for(std::chrono::milliseconds(100));
+            }
+
+            std::cout << std::format("Writer wrote: id={}, value={}, name={}\n", myData.id, myData.value, myData.name);
+            ++index;
+
+            std::this_thread::sleep_for(std::chrono::milliseconds(500));
+        }
+    }};
+
+    std::jthread sender{[&cm, &queue] {
+        while (true) {
+            cm.for_each_client([&queue](WebSocketChannelPtr const& channel, size_t client_id) {
+                std::optional<MyData> value;
+                while (!(value = queue.pop(client_id))) {
+                    std::cout << "Queue is empty, consumer " << client_id << " cannot pop.\n";
+                    std::this_thread::sleep_for(std::chrono::milliseconds(200));
+                }
+
+                auto ptr = reinterpret_cast<const char*>(&value.value());
+                std::cout<<std::format("send {} begin---------------\n",  value.value().id);
+                channel->send(ptr, sizeof(MyData));
+                std::cout<<std::format("send {} end---------------\n",  value.value().id);
             });
-            std::this_thread::sleep_for(std::chrono::milliseconds(100));
-            ++i;
         }
     }};
 }
