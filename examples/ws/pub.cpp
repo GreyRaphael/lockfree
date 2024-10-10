@@ -116,7 +116,7 @@ int main(int argc, char** argv) {
                 std::this_thread::sleep_for(std::chrono::milliseconds(100));
             }
 
-            std::cout << std::format("Writer wrote: id={}, value={}, name={}\n", myData.id, myData.value, myData.name);
+            std::cout << std::format("Writer wrote: id={}, value={:.2f}, name={}\n", myData.id, myData.value, myData.name);
             ++index;
 
             std::this_thread::sleep_for(std::chrono::milliseconds(500));
@@ -126,20 +126,15 @@ int main(int argc, char** argv) {
     std::jthread sender{[&cm, &queue] {
         while (true) {
             cm.for_each_client([&queue](WebSocketChannelPtr const& channel, size_t client_id) {
-                std::optional<MyData> value;
-                auto current_pos = queue.get_read_pos(client_id);
-                while (!(value = queue.pop(client_id))) {
-                    std::cout << "Queue is empty, consumer " << client_id << " cannot pop.\n";
-                    std::this_thread::sleep_for(std::chrono::milliseconds(200));
+                std::optional<MyData> data;
+                data = queue.pop(client_id);
+                // if data is empty, the read_pos of lockfree queue won't be updated
+                if (data.has_value()) {
+                    auto ptr = reinterpret_cast<const char*>(&data.value());
+                    auto ret = channel->send(ptr, sizeof(MyData));
+                    // if ret < 0, send failed
+                    std::cout << std::format("send {} to {}, ret={}------------\n", data.value().name, client_id, ret);
                 }
-
-                auto ptr = reinterpret_cast<const char*>(&value.value());
-                std::cout << std::format("send {} begin---------------\n", value.value().id);
-                auto ret = channel->send(ptr, sizeof(MyData));
-                if (ret < 0) {
-                    queue.set_read_pos(client_id, current_pos);
-                }
-                std::cout << std::format("send {} end {}---------------\n", value.value().id, ret);
             });
         }
     }};

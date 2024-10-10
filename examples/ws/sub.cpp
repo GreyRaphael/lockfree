@@ -2,7 +2,7 @@
 #include <hv/http_content.h>
 
 #include <cstdio>
-#include <fstream>
+#include <format>
 
 struct MyData {
     int id;
@@ -11,9 +11,11 @@ struct MyData {
 };
 
 int main(int argc, char** argv) {
-    std::ifstream fin{"client.json"};
-    auto j = hv::Json::parse(fin);
-    std::string addr = j["addr"];
+    if (argc < 2) {
+        printf("Usage: %s name\n", argv[0]);
+        return -1;
+    }
+    std::string addr = std::format("localhost:8888/?name={}", argv[1]);
 
     hv::WebSocketClient ws;
     ws.setPingInterval(0);

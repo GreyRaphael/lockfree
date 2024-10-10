@@ -90,7 +90,7 @@ class SPMC<T, BufSize, MaxReaderNum, trans::broadcast> {
         return read_positions_[consumerId].load(std::memory_order_acquire);
     }
 
-    void set_read_pos(size_t consumerId, size_t pos) {
+    void set_read_pos(size_t consumerId, size_t pos) noexcept {
         read_positions_[consumerId].store(pos, std::memory_order_release);
     }
 };
