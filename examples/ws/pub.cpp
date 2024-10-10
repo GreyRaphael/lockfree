@@ -4,14 +4,15 @@
 #include <hv/WebSocketServer.h>
 #include <hv/http_content.h>
 
+#include <array>
+#include <atomic>
 #include <chrono>
 #include <format>
 #include <iostream>
-#include <mutex>
-#include <shared_mutex>
+#include <memory>
+#include <optional>
 #include <string>
 #include <thread>
-#include <unordered_map>
 
 #include "queue/spmc.hpp"
 
@@ -24,36 +25,10 @@ struct MyData {
 #define BUFFER_CAPACITY 128
 #define MAX_READERS 16
 
-// Thread-safe container for clients
-class ClientManager {
-    mutable std::shared_mutex mutex_;
-    std::unordered_map<WebSocketChannelPtr, size_t> channels_;  // {channel, client_id}
-
-   public:
-    void add(WebSocketChannelPtr const& channel, size_t id) {
-        std::unique_lock lock(mutex_);
-        channels_[channel] = id;
-    }
-
-    void remove(WebSocketChannelPtr const& channel) {
-        std::unique_lock lock(mutex_);
-        channels_.erase(channel);
-    }
-
-    // Allows safe iteration over clients without copying
-    void for_each_client(auto&& func) const {
-        // when shared_lock lock, unique_lock cannot be acquired
-        std::shared_lock lock(mutex_);
-        for (const auto& [channel, client_id] : channels_) {
-            func(channel, client_id);
-        }
-    }
-};
-
 int main(int argc, char** argv) {
-    ClientManager cm;
-    WebSocketService ws;  // default ping interval is disabled
-    ws.onopen = [&cm](WebSocketChannelPtr const& channel, const HttpRequestPtr& req) {
+    std::array<std::atomic<WebSocketChannelPtr>, MAX_READERS> channels;  // all nullptr
+    WebSocketService ws;                                                 // default ping interval is disabled
+    ws.onopen = [&channels](WebSocketChannelPtr const& channel, const HttpRequestPtr& req) {
         auto id_str = req->GetParam("id", "0");
         size_t id = 0;  // default value if parsing fails
         std::from_chars(id_str.data(), id_str.data() + id_str.size(), id);
@@ -66,12 +41,31 @@ int main(int argc, char** argv) {
             return;
         }
 
-        cm.add(channel, id);
-        std::cout << std::format("client {} connected {}\n", id, req->Path());
+        WebSocketChannelPtr expected{nullptr};
+        if (channels[id].compare_exchange_strong(expected, channel, std::memory_order_acq_rel, std::memory_order_relaxed)) {
+            // compare contained with expected, if true, set contained to channel
+            std::cout << std::format("client {} connected {}\n", id, req->Path());
+            // set context for channel
+            channel->setContextPtr(std::make_shared<std::optional<size_t>>(id));
+        } else {
+            // compare contained with expected, if false, set expected to contained
+            MyData myData{};
+            snprintf(myData.msg, sizeof(myData.msg), "err,id=%lu in use", id);
+            channel->send(reinterpret_cast<const char*>(&myData), sizeof(MyData));
+            channel->setContextPtr(std::make_shared<std::optional<size_t>>(std::nullopt));
+            channel->close();
+            return;
+        }
     };
-    ws.onclose = [&cm](WebSocketChannelPtr const& channel) {
-        cm.remove(channel);
-        std::cout << "client disconnected\n";
+    ws.onclose = [&channels](WebSocketChannelPtr const& channel) {
+        auto id_ptr = channel->getContextPtr<std::optional<size_t>>();
+        auto opt_id = *id_ptr;
+        if (opt_id.has_value()) {
+            channels[opt_id.value()].store(nullptr, std::memory_order_release);
+            std::cout << std::format("client {} disconnected\n", opt_id.value());
+        } else {
+            std::cout << "client duplicated disconnected\n";
+        }
     };
 
     hv::WebSocketServer server{&ws};
@@ -102,19 +96,27 @@ int main(int argc, char** argv) {
         }
     }};
 
-    std::jthread sender{[&cm, &queue] {
+    std::jthread sender{[&channels, &queue] {
         while (true) {
-            cm.for_each_client([&queue](WebSocketChannelPtr const& channel, size_t client_id) {
-                std::optional<MyData> data;
-                data = queue.pop(client_id);
-                // if data is empty, the read_pos of lockfree queue won't be updated
-                if (data.has_value()) {
-                    auto ptr = reinterpret_cast<const char*>(&data.value());
-                    auto ret = channel->send(ptr, sizeof(MyData));
-                    // if ret < 0, send failed
-                    std::cout << std::format("send {} to {}, ret={}------------\n", data.value().msg, client_id, ret);
+            bool has_data = false;
+            for (size_t i = 0; i < MAX_READERS; ++i) {
+                auto channel = channels[i].load(std::memory_order_acquire);
+                if (channel) {
+                    auto data = queue.pop(i);
+                    if (data.has_value()) {
+                        auto ptr = reinterpret_cast<const char*>(&data.value());
+                        auto ret = channel->send(ptr, sizeof(MyData));
+                        // if ret < 0, send failed
+                        std::cout << std::format("send {} to {}, ret={}------------\n", data.value().msg, i, ret);
+                        has_data = true;
+                    }
                 }
-            });
+            }
+
+            // all not has_data
+            if (!has_data) {
+                std::this_thread::sleep_for(std::chrono::milliseconds(100));
+            }
         }
     }};
 }
