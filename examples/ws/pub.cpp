@@ -5,27 +5,34 @@
 #include <hv/http_content.h>
 
 #include <chrono>
-#include <cstddef>
 #include <format>
-#include <fstream>
 #include <iostream>
 #include <mutex>
 #include <shared_mutex>
+#include <string>
 #include <thread>
 #include <unordered_map>
 
 #include "queue/spmc.hpp"
 
+struct MyData {
+    int id;
+    double value;
+    char msg[16];
+};
+
+#define BUFFER_CAPACITY 128
+#define MAX_READERS 16
+
 // Thread-safe container for clients
 class ClientManager {
     mutable std::shared_mutex mutex_;
     std::unordered_map<WebSocketChannelPtr, size_t> channels_;  // {channel, client_id}
-    std::unordered_map<std::string, size_t> clients_map_;       // {name, client_id}
 
    public:
-    void add(WebSocketChannelPtr const& channel, std::string const& name) {
+    void add(WebSocketChannelPtr const& channel, size_t id) {
         std::unique_lock lock(mutex_);
-        channels_[channel] = retrive_id(name);
+        channels_[channel] = id;
     }
 
     void remove(WebSocketChannelPtr const& channel) {
@@ -40,55 +47,26 @@ class ClientManager {
             func(channel, client_id);
         }
     }
-
-    size_t retrive_id(std::string const& name) {
-        if (clients_map_.contains(name)) {
-            return clients_map_[name];
-        }
-        return SIZE_MAX;
-    }
-
-    size_t retrive_id(WebSocketChannelPtr const& channel) {
-        if (channels_.contains(channel)) {
-            return channels_[channel];
-        }
-        return SIZE_MAX;
-    }
-
-    // load registered clients from json file
-    void load_clients() {
-        std::ifstream fin{"clientdb.json"};
-        auto j = hv::Json::parse(fin);
-        for (auto&& client : j["clients"]) {
-            std::string name = client["name"];
-            size_t id = client["id"];
-            clients_map_[name] = id;
-        }
-    }
 };
-
-struct MyData {
-    int id;
-    double value;
-    char name[16];
-};
-
-#define BUFFER_CAPACITY 128  // Number of entries in the buffer
-#define MAX_READERS 16
 
 int main(int argc, char** argv) {
-    std::ifstream fin{"server.json"};
-    auto j = hv::Json::parse(fin);
-    std::string host = j["host"];
-    int port = j["port"];
-
     ClientManager cm;
-    cm.load_clients();
     WebSocketService ws;  // default ping interval is disabled
     ws.onopen = [&cm](WebSocketChannelPtr const& channel, const HttpRequestPtr& req) {
-        auto name = req->GetParam("name", "foo");
-        cm.add(channel, name);
-        std::cout << std::format("client {} connected {}\n", name, req->Path());
+        auto id_str = req->GetParam("id", "0");
+        size_t id = 0;  // default value if parsing fails
+        std::from_chars(id_str.data(), id_str.data() + id_str.size(), id);
+
+        if (id >= MAX_READERS) {
+            MyData myData{};
+            snprintf(myData.msg, sizeof(myData.msg), "err,id>=%u", MAX_READERS);
+            channel->send(reinterpret_cast<const char*>(&myData), sizeof(MyData));
+            channel->close();  // invalid id, close connection
+            return;
+        }
+
+        cm.add(channel, id);
+        std::cout << std::format("client {} connected {}\n", id, req->Path());
     };
     ws.onclose = [&cm](WebSocketChannelPtr const& channel) {
         cm.remove(channel);
@@ -96,19 +74,19 @@ int main(int argc, char** argv) {
     };
 
     hv::WebSocketServer server{&ws};
-    server.setHost(host.c_str());
-    server.setPort(port);
-    printf("listening to %s:%d...\n", server.host, server.port);
+    server.setHost("localhost");
+    server.setPort(8888);
+    std::cout << std::format("listening to {}:{}...\n", server.host, server.port);
     server.start();
 
     lockfree::SPMC<MyData, BUFFER_CAPACITY, MAX_READERS, lockfree::trans::broadcast> queue;
     std::jthread writer{[&queue] {
         size_t index = 0;
         while (true) {
-            MyData myData;
+            MyData myData{};
             myData.id = index;
             myData.value = index * 0.1;
-            snprintf(myData.name, sizeof(myData.name), "Data%zu", index);
+            snprintf(myData.msg, sizeof(myData.msg), "Data%zu", index);
 
             // Attempt to push data into the ring buffer
             while (!queue.push(myData)) {
@@ -116,7 +94,7 @@ int main(int argc, char** argv) {
                 std::this_thread::sleep_for(std::chrono::milliseconds(100));
             }
 
-            std::cout << std::format("Writer wrote: id={}, value={:.2f}, name={}\n", myData.id, myData.value, myData.name);
+            std::cout << std::format("Writer wrote: id={}, value={:.2f}, msg={}\n", myData.id, myData.value, myData.msg);
             ++index;
 
             std::this_thread::sleep_for(std::chrono::milliseconds(500));
@@ -133,7 +111,7 @@ int main(int argc, char** argv) {
                     auto ptr = reinterpret_cast<const char*>(&data.value());
                     auto ret = channel->send(ptr, sizeof(MyData));
                     // if ret < 0, send failed
-                    std::cout << std::format("send {} to {}, ret={}------------\n", data.value().name, client_id, ret);
+                    std::cout << std::format("send {} to {}, ret={}------------\n", data.value().msg, client_id, ret);
                 }
             });
         }
