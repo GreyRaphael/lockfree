@@ -42,6 +42,7 @@ class ClientManager {
 
     // Allows safe iteration over clients without copying
     void for_each_client(auto&& func) const {
+        // when shared_lock lock, unique_lock cannot be acquired
         std::shared_lock lock(mutex_);
         for (const auto& [channel, client_id] : channels_) {
             func(channel, client_id);
