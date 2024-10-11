@@ -26,8 +26,8 @@ struct MyData {
 #define MAX_READERS 16
 
 int main(int argc, char** argv) {
-    std::array<std::atomic<WebSocketChannelPtr>, MAX_READERS> channels;  // all nullptr
-    WebSocketService ws;                                                 // default ping interval is disabled
+    std::array<std::atomic<WebSocketChannelPtr>, MAX_READERS> channels{};  // all nullptr
+    WebSocketService ws;                                                   // default ping interval is disabled
     ws.onopen = [&channels](WebSocketChannelPtr const& channel, const HttpRequestPtr& req) {
         auto id_str = req->GetParam("id", "0");
         size_t id = 0;  // default value if parsing fails
@@ -46,25 +46,23 @@ int main(int argc, char** argv) {
             // compare contained with expected, if true, set contained to channel
             std::cout << std::format("client {} connected {}\n", id, req->Path());
             // set context for channel
-            channel->setContextPtr(std::make_shared<std::optional<size_t>>(id));
+            channel->setContextPtr(std::make_shared<size_t>(id));
         } else {
             // compare contained with expected, if false, set expected to contained
             MyData myData{};
             snprintf(myData.msg, sizeof(myData.msg), "err,id=%lu in use", id);
             channel->send(reinterpret_cast<const char*>(&myData), sizeof(MyData));
-            channel->setContextPtr(std::make_shared<std::optional<size_t>>(std::nullopt));
             channel->close();
             return;
         }
     };
     ws.onclose = [&channels](WebSocketChannelPtr const& channel) {
-        auto id_ptr = channel->getContextPtr<std::optional<size_t>>();
-        auto opt_id = *id_ptr;
-        if (opt_id.has_value()) {
-            channels[opt_id.value()].store(nullptr, std::memory_order_release);
-            std::cout << std::format("client {} disconnected\n", opt_id.value());
+        auto id_ptr = channel->getContextPtr<size_t>();
+        if (id_ptr) {
+            channels[*id_ptr].store(nullptr, std::memory_order_release);
+            std::cout << std::format("client {} disconnected\n", *id_ptr);
         } else {
-            std::cout << "client duplicated disconnected\n";
+            std::cout << "client without id disconnected\n";
         }
     };
 
@@ -106,7 +104,9 @@ int main(int argc, char** argv) {
                     if (data.has_value()) {
                         auto ptr = reinterpret_cast<const char*>(&data.value());
                         auto ret = channel->send(ptr, sizeof(MyData));
-                        // if ret < 0, send failed
+                        if (ret < 0) {
+                            queue.fetch_sub_read_pos(i, 1);
+                        }
                         std::cout << std::format("send {} to {}, ret={}------------\n", data.value().msg, i, ret);
                         has_data = true;
                     }
