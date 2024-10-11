@@ -31,9 +31,9 @@ int main(int argc, char** argv) {
     ws.onopen = [&channels](WebSocketChannelPtr const& channel, const HttpRequestPtr& req) {
         auto id_str = req->GetParam("id", "0");
         size_t id = 0;  // default value if parsing fails
-        std::from_chars(id_str.data(), id_str.data() + id_str.size(), id);
+        auto [ptr, ec] = std::from_chars(id_str.data(), id_str.data() + id_str.size(), id);
 
-        if (id >= MAX_READERS) {
+        if (ec != std::errc() || id >= MAX_READERS) {
             MyData myData{};
             snprintf(myData.msg, sizeof(myData.msg), "err,id>=%u", MAX_READERS);
             channel->send(reinterpret_cast<const char*>(&myData), sizeof(MyData));
@@ -46,6 +46,7 @@ int main(int argc, char** argv) {
             // compare contained with expected, if true, set contained to channel
             std::cout << std::format("client {} connected {}\n", id, req->Path());
             // set context for channel
+            // contained ptr in channels[id] is atomic, but the data it pointed to can be modified by channel
             channel->setContextPtr(std::make_shared<size_t>(id));
         } else {
             // compare contained with expected, if false, set expected to contained
@@ -57,8 +58,7 @@ int main(int argc, char** argv) {
         }
     };
     ws.onclose = [&channels](WebSocketChannelPtr const& channel) {
-        auto id_ptr = channel->getContextPtr<size_t>();
-        if (id_ptr) {
+        if (auto id_ptr = channel->getContextPtr<size_t>(); id_ptr) {
             channels[*id_ptr].store(nullptr, std::memory_order_release);
             std::cout << std::format("client {} disconnected\n", *id_ptr);
         } else {
@@ -96,26 +96,25 @@ int main(int argc, char** argv) {
 
     std::jthread sender{[&channels, &queue] {
         while (true) {
-            bool has_data = false;
+            bool all_has_data = false;
             for (size_t i = 0; i < MAX_READERS; ++i) {
                 auto channel = channels[i].load(std::memory_order_acquire);
                 if (channel) {
-                    auto data = queue.pop(i);
-                    if (data.has_value()) {
+                    if (auto data = queue.pop(i); data.has_value()) {
                         auto ptr = reinterpret_cast<const char*>(&data.value());
                         auto ret = channel->send(ptr, sizeof(MyData));
                         if (ret < 0) {
-                            // send failed, read_pos reset
+                            // Send failed, adjust the read position
                             queue.fetch_sub_read_pos(i, 1);
                         }
                         std::cout << std::format("send {} to {}, ret={}------------\n", data.value().msg, i, ret);
-                        has_data = true;
+                        all_has_data = true;
                     }
                 }
             }
 
             // all not has_data
-            if (!has_data) {
+            if (!all_has_data) {
                 std::this_thread::sleep_for(std::chrono::milliseconds(100));
             }
         }
