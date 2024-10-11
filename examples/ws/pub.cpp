@@ -105,6 +105,7 @@ int main(int argc, char** argv) {
                         auto ptr = reinterpret_cast<const char*>(&data.value());
                         auto ret = channel->send(ptr, sizeof(MyData));
                         if (ret < 0) {
+                            // send failed, read_pos reset
                             queue.fetch_sub_read_pos(i, 1);
                         }
                         std::cout << std::format("send {} to {}, ret={}------------\n", data.value().msg, i, ret);
