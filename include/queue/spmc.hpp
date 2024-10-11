@@ -6,6 +6,7 @@
 #include <thread>
 
 #include "def.hpp"
+
 namespace lockfree {
 
 // Create the general template
@@ -63,17 +64,59 @@ class SPMC<T, BufSize, MaxReaderNum, trans::broadcast> {
         return true;
     }
 
+    template <typename U>
+    bool do_push_overwrite(U&& u) noexcept {
+        size_t current_write = write_pos_.load(std::memory_order_relaxed);
+
+        // Overwrite data in the buffer
+        buffer_[current_write & MASK] = std::forward<U>(u);
+
+        // Update the writer index with release semantics
+        write_pos_.store(current_write + 1, std::memory_order_release);
+
+        return true;
+    }
+
    public:
     // Push method for lvalue references
     bool push(const T& t) noexcept { return do_push(t); }
-
     // Push method for rvalue references
     bool push(T&& t) noexcept { return do_push(std::move(t)); }
+
+    // Push method for lvalue references with overwrite
+    bool push_overwrite(const T& t) noexcept { return do_push_overwrite(t); }
+    // Push method for rvalue references with overwrite
+    bool push_overwrite(T&& t) noexcept { return do_push_overwrite(std::move(t)); }
+
     // Pop method
     std::optional<T> pop(size_t consumerId) noexcept {
         // attention, consumerId must < MaxReaderNum
         size_t current_read = read_positions_[consumerId].load(std::memory_order_relaxed);
         size_t current_write = write_pos_.load(std::memory_order_acquire);
+
+        // Check if there's data to read
+        if (current_read >= current_write) {
+            return std::nullopt;  // Queue is empty
+        }
+
+        // Read data and update reader index
+        T value = std::move(buffer_[current_read & MASK]);
+        read_positions_[consumerId].store(current_read + 1, std::memory_order_release);
+        return value;
+    }
+
+    // Pop method with overwrite
+    std::optional<T> pop_overwrite(size_t consumerId) noexcept {
+        size_t current_read = read_positions_[consumerId].load(std::memory_order_relaxed);
+        size_t current_write = write_pos_.load(std::memory_order_acquire);
+
+        // Check if the consumer has missed data
+        if (current_read + BufSize <= current_write) {
+            // Data has been overwritten
+            current_read = current_write - BufSize + 1;
+            read_positions_[consumerId].store(current_read, std::memory_order_release);
+            return std::nullopt;  // Indicate data loss
+        }
 
         // Check if there's data to read
         if (current_read >= current_write) {
