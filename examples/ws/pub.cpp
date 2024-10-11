@@ -81,7 +81,8 @@ int main(int argc, char** argv) {
             snprintf(myData.msg, sizeof(myData.msg), "Data%zu", index);
 
             // Attempt to push data into the ring buffer
-            while (!queue.push(myData)) {
+            // while (!queue.push(myData)) {
+            while (!queue.push_overwrite(myData)) {
                 std::cout << "Queue is full, cannot push. Retrying...\n";
                 std::this_thread::sleep_for(std::chrono::milliseconds(100));
             }
@@ -89,7 +90,7 @@ int main(int argc, char** argv) {
             std::cout << std::format("Writer wrote: id={}, value={:.2f}, msg={}\n", myData.id, myData.value, myData.msg);
             ++index;
 
-            std::this_thread::sleep_for(std::chrono::milliseconds(500));
+            std::this_thread::sleep_for(std::chrono::milliseconds(100));
         }
     }};
 
@@ -99,7 +100,8 @@ int main(int argc, char** argv) {
             for (size_t i = 0; i < MAX_READERS; ++i) {
                 auto channel = channels[i].load(std::memory_order_acquire);
                 if (channel) {
-                    if (auto data = queue.pop(i); data.has_value()) {
+                    // if (auto data = queue.pop(i); data.has_value()) {
+                    if (auto data = queue.pop_overwrite(i); data.has_value()) {
                         auto ptr = reinterpret_cast<const char*>(&data.value());
                         auto ret = channel->send(ptr, sizeof(MyData));
                         if (ret < 0) {
@@ -114,7 +116,7 @@ int main(int argc, char** argv) {
 
             // all not has_data
             if (!all_has_data) {
-                std::this_thread::sleep_for(std::chrono::milliseconds(100));
+                std::this_thread::sleep_for(std::chrono::milliseconds(10)); // should smaller than writer interval
             }
         }
     }};
