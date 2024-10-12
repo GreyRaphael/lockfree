@@ -107,13 +107,13 @@ int main(int argc, char** argv) {
     std::jthread sender{[&channels, &queue] {
         while (true) {
             bool all_has_data = false;
+            flatbuffers::FlatBufferBuilder bar_builder;
+            flatbuffers::FlatBufferBuilder tick_builder;
             for (size_t i = 0; i < MAX_READERS; ++i) {
                 auto channel = channels[i].load(std::memory_order_acquire);
                 if (channel) {
                     // if (auto data = queue.pop(i); data.has_value()) {
                     if (auto data = queue.pop_overwrite(i); data.has_value()) {
-                        flatbuffers::FlatBufferBuilder bar_builder;
-                        flatbuffers::FlatBufferBuilder tick_builder;
                         serialize_bar_data(bar_builder, data.value());
                         serialize_tick_data(tick_builder, data.value());
                         auto ret1 = channel->send(reinterpret_cast<const char*>(bar_builder.GetBufferPointer()), bar_builder.GetSize());
@@ -124,6 +124,8 @@ int main(int argc, char** argv) {
                         }
                         std::cout << std::format("send {} to {}, ret={}------------\n", data.value(), i, ret1 + ret2);
                         all_has_data = true;
+                        bar_builder.Clear();
+                        tick_builder.Clear();
                     }
                 }
             }
