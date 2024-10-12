@@ -26,7 +26,7 @@ template <typename T>
 using SPMCQueue = lockfree::SPMC<T, BUFFER_CAPACITY, MAX_READERS, lockfree::trans::broadcast>;
 
 // Serialization functions that return serialized data
-std::shared_ptr<std::vector<uint8_t>> serialize_bar_data(int id) {
+std::vector<uint8_t> serialize_bar_data(int id) {
     flatbuffers::FlatBufferBuilder builder;
     auto bar = Messages::CreateBarDataDirect(builder, id, "apple", 12.3, 1000, 2300.0);
     auto msg = Messages::CreateMessage(builder, Messages::MessageType::BarData, Messages::Payload::BarData, bar.Union());
@@ -34,11 +34,10 @@ std::shared_ptr<std::vector<uint8_t>> serialize_bar_data(int id) {
     auto size = builder.GetSize();
     auto buffer_ptr = builder.GetBufferPointer();
     // Copy the data into a vector
-    auto data = std::make_shared<std::vector<uint8_t>>(buffer_ptr, buffer_ptr + size);
-    return data;
+    return std::vector<uint8_t>(buffer_ptr, buffer_ptr + size);
 }
 
-std::shared_ptr<std::vector<uint8_t>> serialize_tick_data(int id) {
+std::vector<uint8_t> serialize_tick_data(int id) {
     flatbuffers::FlatBufferBuilder builder;
     std::vector<int> vols{1, 2, 3, 45};
     auto tick = Messages::CreateTickDataDirect(builder, id, "msft", 12.3, 12.4, &vols);
@@ -47,8 +46,7 @@ std::shared_ptr<std::vector<uint8_t>> serialize_tick_data(int id) {
     auto size = builder.GetSize();
     auto buffer_ptr = builder.GetBufferPointer();
     // Copy the data into a vector
-    auto data = std::make_shared<std::vector<uint8_t>>(buffer_ptr, buffer_ptr + size);
-    return data;
+    return std::vector<uint8_t>(buffer_ptr, buffer_ptr + size);
 }
 
 void serialize_err_data(flatbuffers::FlatBufferBuilder& builder, const char* text) {
@@ -62,9 +60,8 @@ template <typename QueueType, typename SerializeFunc>
 void writer_thread(QueueType& queue, SerializeFunc serialize_func, const std::string& data_type, std::chrono::milliseconds interval) {
     size_t index = 0;
     while (true) {
-        auto serialized_data = serialize_func(index);
         // Attempt to push data into the ring buffer
-        while (!queue.push_overwrite(serialized_data)) {
+        while (!queue.push_overwrite(serialize_func(index))) {
             std::cout << "Queue is full for " << data_type << ", cannot push. Retrying...\n";
             std::this_thread::sleep_for(std::chrono::milliseconds(100));
         }
@@ -85,8 +82,8 @@ void sender_thread(std::array<std::atomic<WebSocketChannelPtr>, MAX_READERS>& ch
             auto channel = channels[i].load(std::memory_order_acquire);
             if (channel) {
                 if (auto data = queue.pop_overwrite(i); data.has_value()) {
-                    auto serialized_data = data.value();
-                    auto ret = channel->send(reinterpret_cast<const char*>(serialized_data->data()), serialized_data->size());
+                    auto& serialized_data = data.value();
+                    auto ret = channel->send(reinterpret_cast<const char*>(serialized_data.data()), serialized_data.size());
                     if (ret < 0) {
                         // Send failed, adjust the read position
                         queue.fetch_sub_read_pos(i, 1);
@@ -150,8 +147,8 @@ int main(int argc, char** argv) {
     server.start();
 
     // Queues for serialized data
-    SPMCQueue<std::shared_ptr<std::vector<uint8_t>>> bar_queue;
-    SPMCQueue<std::shared_ptr<std::vector<uint8_t>>> tick_queue;
+    SPMCQueue<std::vector<uint8_t>> bar_queue;
+    SPMCQueue<std::vector<uint8_t>> tick_queue;
 
     // Writer threads with serialization functions
     std::jthread bar_writer(writer_thread<decltype(bar_queue), decltype(serialize_bar_data)>,
