@@ -17,6 +17,60 @@
 #include "message_generated.h"
 #include "queue/spmc.hpp"
 
+#define BUFFER_CAPACITY 128
+#define MAX_READERS 16
+
+// Type alias for the lock-free queue
+template <typename T>
+using SPMCQueue = lockfree::SPMC<T, BUFFER_CAPACITY, MAX_READERS, lockfree::trans::broadcast>;
+
+// Generalized writer thread function
+template <typename QueueType>
+void writer_thread(QueueType& queue, const std::string& data_type, std::chrono::milliseconds interval) {
+    size_t index = 0;
+    while (true) {
+        while (!queue.push_overwrite(index)) {
+            std::cout << "Queue is full for " << data_type << ", cannot push. Retrying...\n";
+            std::this_thread::sleep_for(std::chrono::milliseconds(100));
+        }
+        std::cout << std::format("Writer wrote: {} id={}\n", data_type, index);
+        ++index;
+        std::this_thread::sleep_for(interval);
+    }
+}
+
+// Generalized sender thread function
+template <typename QueueType, typename SerializeFunc>
+void sender_thread(std::array<std::atomic<WebSocketChannelPtr>, MAX_READERS>& channels,
+                   QueueType& queue,
+                   SerializeFunc serialize_func,
+                   const std::string& data_type) {
+    flatbuffers::FlatBufferBuilder builder;
+    while (true) {
+        bool any_data_sent = false;
+        for (size_t i = 0; i < MAX_READERS; ++i) {
+            auto channel = channels[i].load(std::memory_order_acquire);
+            if (channel) {
+                if (auto data = queue.pop_overwrite(i); data.has_value()) {
+                    serialize_func(builder, data.value());
+                    auto ret = channel->send(reinterpret_cast<const char*>(builder.GetBufferPointer()), builder.GetSize());
+                    if (ret < 0) {
+                        // Send failed, adjust the read position
+                        queue.fetch_sub_read_pos(i, 1);
+                    }
+                    std::cout << std::format("Sent {} {} to client {}, ret={}\n", data_type, data.value(), i, ret);
+                    any_data_sent = true;
+                    builder.Clear();
+                }
+            }
+        }
+        if (!any_data_sent) {
+            std::this_thread::sleep_for(std::chrono::milliseconds(10));  // Should be smaller than writer interval
+        }
+    }
+}
+
+// Serialization functions
 void serialize_bar_data(flatbuffers::FlatBufferBuilder& builder, int id) {
     auto bar = Messages::CreateBarDataDirect(builder, id, "apple", 12.3, 1000, 2300.0);
     auto msg = Messages::CreateMessage(builder, Messages::MessageType::BarData, Messages::Payload::BarData, bar.Union());
@@ -36,12 +90,11 @@ void serialize_err_data(flatbuffers::FlatBufferBuilder& builder, const char* tex
     builder.Finish(msg);
 }
 
-#define BUFFER_CAPACITY 128
-#define MAX_READERS 16
-
 int main(int argc, char** argv) {
     std::array<std::atomic<WebSocketChannelPtr>, MAX_READERS> channels{};  // all nullptr
-    WebSocketService ws;                                                   // default ping interval is disabled
+
+    // WebSocket service setup
+    WebSocketService ws;
     ws.onopen = [&channels](WebSocketChannelPtr const& channel, const HttpRequestPtr& req) {
         auto id_str = req->GetParam("id", "0");
         size_t id = 0;  // default value if parsing fails
@@ -50,128 +103,66 @@ int main(int argc, char** argv) {
         flatbuffers::FlatBufferBuilder builder;
 
         if (ec != std::errc() || id >= MAX_READERS) {
-            serialize_err_data(builder, std::format("err,id>={}", MAX_READERS).c_str());
+            serialize_err_data(builder, std::format("Error: Invalid ID (>= {})", MAX_READERS).c_str());
             channel->send(reinterpret_cast<const char*>(builder.GetBufferPointer()), builder.GetSize());
-            channel->close();  // invalid id, close connection
+            channel->close();  // Invalid ID, close connection
             return;
         }
 
         WebSocketChannelPtr expected{nullptr};
         if (channels[id].compare_exchange_strong(expected, channel, std::memory_order_acq_rel, std::memory_order_relaxed)) {
-            // compare contained with expected, if true, set contained to channel
-            std::cout << std::format("client {} connected {}\n", id, req->Path());
-            // set context for channel
-            // contained ptr in channels[id] is atomic, but the data it pointed to can be modified by channel
+            std::cout << std::format("Client {} connected {}\n", id, req->Path());
             channel->setContextPtr(std::make_shared<size_t>(id));
         } else {
-            // compare contained with expected, if false, set expected to contained
-            serialize_err_data(builder, std::format("err,id={} in use", MAX_READERS).c_str());
+            serialize_err_data(builder, std::format("Error: ID {} in use", id).c_str());
             channel->send(reinterpret_cast<const char*>(builder.GetBufferPointer()), builder.GetSize());
             channel->close();
             return;
         }
     };
+
     ws.onclose = [&channels](WebSocketChannelPtr const& channel) {
         if (auto id_ptr = channel->getContextPtr<size_t>(); id_ptr) {
             channels[*id_ptr].store(nullptr, std::memory_order_release);
-            std::cout << std::format("client {} disconnected\n", *id_ptr);
+            std::cout << std::format("Client {} disconnected\n", *id_ptr);
         } else {
-            std::cout << "client without id disconnected\n";
+            std::cout << "Client without ID disconnected\n";
         }
     };
 
+    // WebSocket server setup
     hv::WebSocketServer server{&ws};
     server.setHost("localhost");
     server.setPort(8888);
-    std::cout << std::format("listening to {}:{}...\n", server.host, server.port);
+    std::cout << std::format("Listening on {}:{}...\n", server.host, server.port);
     server.start();
 
-    lockfree::SPMC<int, BUFFER_CAPACITY, MAX_READERS, lockfree::trans::broadcast> bar_queue;
-    lockfree::SPMC<int, BUFFER_CAPACITY, MAX_READERS, lockfree::trans::broadcast> tick_queue;
-    std::jthread bar_writer{[&bar_queue] {
-        size_t index = 0;
-        while (true) {
-            // Attempt to push data into the ring buffer
-            while (!bar_queue.push_overwrite(index)) {
-                std::cout << "Queue is full, cannot push. Retrying...\n";
-                std::this_thread::sleep_for(std::chrono::milliseconds(100));
-            }
+    // Queues
+    SPMCQueue<int> bar_queue;
+    SPMCQueue<int> tick_queue;
 
-            std::cout << std::format("Writer wrote: bar id={}\n", index);
-            ++index;
+    // Writer threads
+    std::jthread bar_writer(writer_thread<decltype(bar_queue)>, std::ref(bar_queue), "bar", std::chrono::milliseconds(3000));
+    std::jthread tick_writer(writer_thread<decltype(tick_queue)>, std::ref(tick_queue), "tick", std::chrono::milliseconds(1000));
 
-            std::this_thread::sleep_for(std::chrono::milliseconds(3000));
-        }
-    }};
-    std::jthread tick_writer{[&tick_queue] {
-        size_t index = 0;
-        while (true) {
-            // Attempt to push data into the ring buffer
-            while (!tick_queue.push_overwrite(index)) {
-                std::cout << "Queue is full, cannot push. Retrying...\n";
-                std::this_thread::sleep_for(std::chrono::milliseconds(100));
-            }
+    // Serialization lambdas
+    auto bar_serialize = [](flatbuffers::FlatBufferBuilder& builder, int id) {
+        serialize_bar_data(builder, id);
+    };
 
-            std::cout << std::format("Writer wrote: tick id={}\n", index);
-            ++index;
+    auto tick_serialize = [](flatbuffers::FlatBufferBuilder& builder, int id) {
+        serialize_tick_data(builder, id);
+    };
 
-            std::this_thread::sleep_for(std::chrono::milliseconds(1000));
-        }
-    }};
+    // Sender threads
+    std::jthread bar_sender(sender_thread<decltype(bar_queue), decltype(bar_serialize)>,
+                            std::ref(channels), std::ref(bar_queue), bar_serialize, "bar");
 
-    std::jthread bar_sender{[&channels, &bar_queue] {
-        while (true) {
-            bool all_has_data = false;
-            flatbuffers::FlatBufferBuilder builder;
-            for (size_t i = 0; i < MAX_READERS; ++i) {
-                auto channel = channels[i].load(std::memory_order_acquire);
-                if (channel) {
-                    if (auto data = bar_queue.pop_overwrite(i); data.has_value()) {
-                        serialize_bar_data(builder, data.value());
-                        auto ret = channel->send(reinterpret_cast<const char*>(builder.GetBufferPointer()), builder.GetSize());
-                        if (ret < 0) {
-                            // Send failed, adjust the read position
-                            bar_queue.fetch_sub_read_pos(i, 1);
-                        }
-                        std::cout << std::format("send bar {} to {}, ret={}------------\n", data.value(), i, ret);
-                        all_has_data = true;
-                        builder.Clear();
-                    }
-                }
-            }
+    std::jthread tick_sender(sender_thread<decltype(tick_queue), decltype(tick_serialize)>,
+                             std::ref(channels), std::ref(tick_queue), tick_serialize, "tick");
 
-            // all not has_data
-            if (!all_has_data) {
-                std::this_thread::sleep_for(std::chrono::milliseconds(10));  // should smaller than writer interval
-            }
-        }
-    }};
+    // Keep the main thread alive
+    std::this_thread::sleep_for(std::chrono::hours(24));
 
-    std::jthread tick_sender{[&channels, &tick_queue] {
-        while (true) {
-            bool all_has_data = false;
-            flatbuffers::FlatBufferBuilder builder;
-            for (size_t i = 0; i < MAX_READERS; ++i) {
-                auto channel = channels[i].load(std::memory_order_acquire);
-                if (channel) {
-                    if (auto data = tick_queue.pop_overwrite(i); data.has_value()) {
-                        serialize_tick_data(builder, data.value());
-                        auto ret = channel->send(reinterpret_cast<const char*>(builder.GetBufferPointer()), builder.GetSize());
-                        if (ret < 0) {
-                            // Send failed, adjust the read position
-                            tick_queue.fetch_sub_read_pos(i, 1);
-                        }
-                        std::cout << std::format("send tick {} to {}, ret={}------------\n", data.value(), i, ret);
-                        all_has_data = true;
-                        builder.Clear();
-                    }
-                }
-            }
-
-            // all not has_data
-            if (!all_has_data) {
-                std::this_thread::sleep_for(std::chrono::milliseconds(10));  // should smaller than writer interval
-            }
-        }
-    }};
+    return 0;
 }
