@@ -57,4 +57,16 @@ if(BUILD_EXAMPLES)
     add_executable(ws_sub examples/ws/sub.cpp)
     target_include_directories(ws_sub PRIVATE include)
     target_link_libraries(ws_sub PRIVATE hv_static)
+
+    # example websocket pub & sub with flatbuffers
+    find_package(flatbuffers CONFIG REQUIRED)
+    add_executable(wsfb_pub examples/wsfb/pub.cpp)
+    target_include_directories(wsfb_pub PRIVATE include)
+    target_link_libraries(wsfb_pub PRIVATE hv_static)
+    target_link_libraries(wsfb_pub PRIVATE flatbuffers::flatbuffers)
+
+    add_executable(wsfb_sub examples/wsfb/sub.cpp)
+    target_include_directories(wsfb_sub PRIVATE include)
+    target_link_libraries(wsfb_sub PRIVATE hv_static)
+    target_link_libraries(wsfb_sub PRIVATE flatbuffers::flatbuffers)
 endif()
