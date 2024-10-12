@@ -86,46 +86,84 @@ int main(int argc, char** argv) {
     std::cout << std::format("listening to {}:{}...\n", server.host, server.port);
     server.start();
 
-    lockfree::SPMC<int, BUFFER_CAPACITY, MAX_READERS, lockfree::trans::broadcast> queue;
-    std::jthread writer{[&queue] {
+    lockfree::SPMC<int, BUFFER_CAPACITY, MAX_READERS, lockfree::trans::broadcast> bar_queue;
+    lockfree::SPMC<int, BUFFER_CAPACITY, MAX_READERS, lockfree::trans::broadcast> tick_queue;
+    std::jthread bar_writer{[&bar_queue] {
         size_t index = 0;
         while (true) {
             // Attempt to push data into the ring buffer
-            // while (!queue.push(myData)) {
-            while (!queue.push_overwrite(index)) {
+            while (!bar_queue.push_overwrite(index)) {
                 std::cout << "Queue is full, cannot push. Retrying...\n";
                 std::this_thread::sleep_for(std::chrono::milliseconds(100));
             }
 
-            std::cout << std::format("Writer wrote: id={}\n", index);
+            std::cout << std::format("Writer wrote: bar id={}\n", index);
             ++index;
 
-            std::this_thread::sleep_for(std::chrono::milliseconds(100));
+            std::this_thread::sleep_for(std::chrono::milliseconds(3000));
+        }
+    }};
+    std::jthread tick_writer{[&tick_queue] {
+        size_t index = 0;
+        while (true) {
+            // Attempt to push data into the ring buffer
+            while (!tick_queue.push_overwrite(index)) {
+                std::cout << "Queue is full, cannot push. Retrying...\n";
+                std::this_thread::sleep_for(std::chrono::milliseconds(100));
+            }
+
+            std::cout << std::format("Writer wrote: tick id={}\n", index);
+            ++index;
+
+            std::this_thread::sleep_for(std::chrono::milliseconds(1000));
         }
     }};
 
-    std::jthread sender{[&channels, &queue] {
+    std::jthread bar_sender{[&channels, &bar_queue] {
         while (true) {
             bool all_has_data = false;
-            flatbuffers::FlatBufferBuilder bar_builder;
-            flatbuffers::FlatBufferBuilder tick_builder;
+            flatbuffers::FlatBufferBuilder builder;
             for (size_t i = 0; i < MAX_READERS; ++i) {
                 auto channel = channels[i].load(std::memory_order_acquire);
                 if (channel) {
-                    // if (auto data = queue.pop(i); data.has_value()) {
-                    if (auto data = queue.pop_overwrite(i); data.has_value()) {
-                        serialize_bar_data(bar_builder, data.value());
-                        serialize_tick_data(tick_builder, data.value());
-                        auto ret1 = channel->send(reinterpret_cast<const char*>(bar_builder.GetBufferPointer()), bar_builder.GetSize());
-                        auto ret2 = channel->send(reinterpret_cast<const char*>(tick_builder.GetBufferPointer()), tick_builder.GetSize());
-                        if (ret1 < 0 || ret2 < 0) {
+                    if (auto data = bar_queue.pop_overwrite(i); data.has_value()) {
+                        serialize_bar_data(builder, data.value());
+                        auto ret = channel->send(reinterpret_cast<const char*>(builder.GetBufferPointer()), builder.GetSize());
+                        if (ret < 0) {
                             // Send failed, adjust the read position
-                            queue.fetch_sub_read_pos(i, 1);
+                            bar_queue.fetch_sub_read_pos(i, 1);
                         }
-                        std::cout << std::format("send {} to {}, ret={}------------\n", data.value(), i, ret1 + ret2);
+                        std::cout << std::format("send bar {} to {}, ret={}------------\n", data.value(), i, ret);
                         all_has_data = true;
-                        bar_builder.Clear();
-                        tick_builder.Clear();
+                        builder.Clear();
+                    }
+                }
+            }
+
+            // all not has_data
+            if (!all_has_data) {
+                std::this_thread::sleep_for(std::chrono::milliseconds(10));  // should smaller than writer interval
+            }
+        }
+    }};
+
+    std::jthread tick_sender{[&channels, &tick_queue] {
+        while (true) {
+            bool all_has_data = false;
+            flatbuffers::FlatBufferBuilder builder;
+            for (size_t i = 0; i < MAX_READERS; ++i) {
+                auto channel = channels[i].load(std::memory_order_acquire);
+                if (channel) {
+                    if (auto data = tick_queue.pop_overwrite(i); data.has_value()) {
+                        serialize_tick_data(builder, data.value());
+                        auto ret = channel->send(reinterpret_cast<const char*>(builder.GetBufferPointer()), builder.GetSize());
+                        if (ret < 0) {
+                            // Send failed, adjust the read position
+                            tick_queue.fetch_sub_read_pos(i, 1);
+                        }
+                        std::cout << std::format("send tick {} to {}, ret={}------------\n", data.value(), i, ret);
+                        all_has_data = true;
+                        builder.Clear();
                     }
                 }
             }

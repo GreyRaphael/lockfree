@@ -32,7 +32,7 @@ int main(int argc, char** argv) {
         printf("Usage: %s id\n", argv[0]);
         return -1;
     }
-    std::string addr = std::format("localhost:8888/?id={}", argv[1]);
+    std::string addr = std::format("localhost:8888/v1?id={}", argv[1]);
 
     hv::WebSocketClient ws;
     ws.setPingInterval(0);
