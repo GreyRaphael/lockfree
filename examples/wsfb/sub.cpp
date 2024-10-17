@@ -10,20 +10,30 @@
 void deserialize_messages(const char* buffer, size_t size) {
     auto msg_ptr = Messages::GetMessage(buffer);
 
-    if (msg_ptr->type() == Messages::MessageType::BarData) {
-        auto bar = msg_ptr->payload_as_BarData();
-        std::cout << std::format("recv BarData, id={}, symbol={}, price={}, volume={}, amount={}\n", bar->id(), bar->symbol()->str(), bar->price(), bar->volume(), bar->amount());
-    } else if (msg_ptr->type() == Messages::MessageType::TickData) {
-        auto tick = msg_ptr->payload_as_TickData();
-        std::cout << std::format("recv TickData, id={}, symbol={}, open={}, high={}, volumes=[", tick->id(), tick->symbol()->str(), tick->open(), tick->high());
-
-        for (auto volume : *tick->volumes()) {
-            std::cout << std::format("{} ", volume);
+    switch (msg_ptr->payload_type()) {
+        case Messages::Payload::BarData: {
+            auto bar = msg_ptr->payload_as_BarData();
+            std::cout << std::format("recv BarData, id={}, symbol={}, price={:.2f}, volume={}, amount={:.2f}\n", bar->id(), bar->symbol()->str(), bar->price(), bar->volume(), bar->amount());
+            break;
         }
-        std::cout << "]\n";
-    } else if (msg_ptr->type() == Messages::MessageType::ErrData) {
-        auto err = msg_ptr->payload_as_ErrData();
-        std::cout << std::format("recv ErrData, text={}\n", err->text()->str());
+        case Messages::Payload::TickData: {
+            auto tick = msg_ptr->payload_as_TickData();
+            std::cout << std::format("recv TickData, id={}, symbol={}, open={:.2f}, high={:.2f}, volumes=[", tick->id(), tick->symbol()->str(), tick->open(), tick->high());
+
+            for (auto volume : *tick->volumes()) {
+                std::cout << std::format("{} ", volume);
+            }
+            std::cout << "]\n";
+            break;
+        }
+        case Messages::Payload::ErrData: {
+            auto err = msg_ptr->payload_as_ErrData();
+            std::cout << std::format("recv ErrData, text={}\n", err->text()->str());
+            break;
+        }
+        default:
+            std::cout << "unknown payload type\n";
+            break;
     }
 }
 

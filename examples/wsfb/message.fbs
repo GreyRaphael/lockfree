@@ -4,7 +4,7 @@ namespace Messages;
 table BarData {
     id: int;             // int32_t id
     symbol: string;      // char symbol[6] represented as a string
-    price: float;        // float price
+    price: double;        // double price
     volume: long;        // int64_t volume
     amount: double;      // double amount
 }
