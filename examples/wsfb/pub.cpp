@@ -33,7 +33,7 @@ void sender_thread(std::array<std::atomic<WebSocketChannelPtr>, MAX_READERS>& ch
                    QueueType& queue,
                    SerializeFunc serialize_func,
                    std::string_view name) {
-    flatbuffers::FlatBufferBuilder builder;
+    flatbuffers::FlatBufferBuilder builder{1024};
     while (true) {
         bool any_data_sent = false;
         for (size_t i = 0; i < MAX_READERS; ++i) {
@@ -89,7 +89,7 @@ int main(int argc, char** argv) {
         size_t id = 0;  // default value if parsing fails
         auto [ptr, ec] = std::from_chars(id_str.data(), id_str.data() + id_str.size(), id);
 
-        flatbuffers::FlatBufferBuilder builder;
+        flatbuffers::FlatBufferBuilder builder{1024};
 
         if (ec != std::errc() || id >= MAX_READERS) {
             serialize_err_data(builder, std::format("Error: Invalid ID (>= {})", MAX_READERS).c_str());
