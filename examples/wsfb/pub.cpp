@@ -46,7 +46,7 @@ void sender_thread(std::array<std::atomic<WebSocketChannelPtr>, MAX_READERS>& ch
                         // Send failed, adjust the read position
                         queue.fetch_sub_read_pos(i, 1);
                     }
-                    std::cout << std::format("{} send {} bytes to client-{}, ret={}\n", name, sizeof(builder.GetSize()), i, ret);
+                    std::cout << std::format("{} send {} bytes to client-{}, ret={}\n", name, builder.GetSize(), i, ret);
                     any_data_sent = true;
                 }
             }
