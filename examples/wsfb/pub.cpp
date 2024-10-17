@@ -48,7 +48,6 @@ void sender_thread(std::array<std::atomic<WebSocketChannelPtr>, MAX_READERS>& ch
                     }
                     std::cout << std::format("{} send {} bytes to client-{}, ret={}\n", name, sizeof(builder.GetSize()), i, ret);
                     any_data_sent = true;
-                    builder.Clear();
                 }
             }
         }
@@ -148,21 +147,20 @@ int main(int argc, char** argv) {
                             },
                             "bar", 3000};
 
-    std::jthread tick_writer{
-        [&tick_queue](std::string_view name, int interval) {
-            int index = 0;
-            while (true) {
-                TickData tick{index, "APPL", 1.1 * index, 1.2 * index, {index, index * 2, index * 3}};
-                while (!tick_queue.push_overwrite(tick)) {
-                    std::cout << "queue full, sleeping...\n";
-                    std::this_thread::sleep_for(std::chrono::milliseconds(100));
-                }
-                std::cout << std::format("{} writer pushed id={}, symbol={}, vol1={}\n", name, tick.id, tick.symbol, tick.volumes[0]);
-                ++index;
-                std::this_thread::sleep_for(std::chrono::milliseconds(interval));
-            }
-        },
-        "tick", 1000};
+    std::jthread tick_writer{[&tick_queue](std::string_view name, int interval) {
+                                 int index = 0;
+                                 while (true) {
+                                     TickData tick{index, "APPL", 1.1 * index, 1.2 * index, {index, index * 2, index * 3}};
+                                     while (!tick_queue.push_overwrite(tick)) {
+                                         std::cout << "queue full, sleeping...\n";
+                                         std::this_thread::sleep_for(std::chrono::milliseconds(100));
+                                     }
+                                     std::cout << std::format("{} writer pushed id={}, symbol={}, vol1={}\n", name, tick.id, tick.symbol, tick.volumes[0]);
+                                     ++index;
+                                     std::this_thread::sleep_for(std::chrono::milliseconds(interval));
+                                 }
+                             },
+                             "tick", 1000};
 
     // Serialization lambdas
     // Sender threads
