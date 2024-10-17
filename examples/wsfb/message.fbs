@@ -1,13 +1,5 @@
 namespace Messages;
 
-// Enum to identify the type of message
-enum MessageType : byte {
-    NONE = 0,
-    BarData = 1,
-    TickData = 2,
-    ErrData = 3
-}
-
 // Table representing BarData
 table BarData {
     id: int;             // int32_t id
@@ -39,7 +31,6 @@ union Payload {
 
 // Root table that encapsulates any message
 table Message {
-    type: MessageType;       // Type identifier
     payload: Payload;        // Payload containing the actual data
 }
 
