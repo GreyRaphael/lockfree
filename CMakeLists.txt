@@ -1,4 +1,11 @@
 cmake_minimum_required(VERSION 3.20.0)
+
+# must come *before* project()
+set(CMAKE_TOOLCHAIN_FILE
+    "$ENV{VCPKG_ROOT}/scripts/buildsystems/vcpkg.cmake"
+    CACHE STRING
+    "Vcpkg toolchain file")
+
 project(lockfree VERSION 0.1.0 LANGUAGES C CXX)
 
 set(CMAKE_CXX_STANDARD 20)

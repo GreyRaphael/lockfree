@@ -1,0 +1,9 @@
+
+{
+    "dependencies": [
+      "doctest",
+      "libhv",
+      "flatbuffers"
+    ]
+  }
+  
