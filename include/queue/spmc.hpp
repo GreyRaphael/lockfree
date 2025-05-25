@@ -1,6 +1,7 @@
 #pragma once
 #include <array>
 #include <atomic>
+#include <concepts>
 #include <cstddef>
 #include <optional>
 #include <thread>
@@ -9,22 +10,25 @@
 
 namespace lockfree {
 
+static constexpr size_t UPDATE_INTERVAL = 64;
+
 // Create the general template
-template <typename T, size_t BufSize, size_t MaxReaderNum, trans Ts>
+template <typename T, size_t BufSize, size_t MaxReaders, trans Ts>
 class SPMC;
 
 // Specialization for trans::broadcast
-template <typename T, size_t BufSize, size_t MaxReaderNum>
-class SPMC<T, BufSize, MaxReaderNum, trans::broadcast> {
-    static_assert(BufSize >= 2, "Queue size must be at least 2");
-    static_assert((BufSize & (BufSize - 1)) == 0, "Queue size must be a power of 2 for efficient modulo operations");
+template <typename T, size_t BufSize, size_t MaxReaders>
+    requires(BufSize > UPDATE_INTERVAL) && ((BufSize & (BufSize - 1)) == 0) && (MaxReaders >= 1)
+class SPMC<T, BufSize, MaxReaders, trans::broadcast> {
     static constexpr size_t MASK = BufSize - 1;
-    static_assert(MaxReaderNum >= 1, "MaxReaderNum must be at least 1");
 
     std::array<T, BufSize> buffer_{};
     // Align write_pos and read_pos to separate cache lines to prevent false sharing
     alignas(64) std::atomic<size_t> write_pos_{0};
-    std::array<std::atomic<size_t>, MaxReaderNum> read_positions_{};
+    std::array<std::atomic<size_t>, MaxReaders> read_positions_{};
+
+    // Optional: cache a “min reader” to avoid full scans every push
+    size_t min_read_cache_{0};
 
    public:
     SPMC() noexcept = default;
@@ -36,23 +40,25 @@ class SPMC<T, BufSize, MaxReaderNum, trans::broadcast> {
     SPMC(SPMC&&) = delete;
     SPMC& operator=(SPMC&&) = delete;
 
-   private:
     template <typename U>
-    bool do_push(U&& u) noexcept {
-        // Get the minimum reader index to determine how much the buffer has been consumed
-        size_t min_reader_index = std::numeric_limits<size_t>::max();  // SIZE_MAX
-        for (size_t i = 0; i < MaxReaderNum; ++i) {
-            size_t reader_index = read_positions_[i].load(std::memory_order_acquire);
-            if (reader_index < min_reader_index) {
-                min_reader_index = reader_index;
-            }
-        }
-
+        requires std::constructible_from<T, U&&>
+    bool push(U&& u) noexcept {
         size_t current_write = write_pos_.load(std::memory_order_relaxed);
-
-        if (current_write - min_reader_index >= BufSize) {
-            return false;  // Queue is full
+        // occasionally refresh min_read_cache_
+        if ((current_write & (UPDATE_INTERVAL - 1)) == 0) {
+            // Get the minimum reader index to determine how much the buffer has been consumed
+            size_t min_reader_index = SIZE_MAX;
+            for (size_t i = 0; i < MaxReaders; ++i) {
+                size_t reader_index = read_positions_[i].load(std::memory_order_acquire);
+                if (reader_index < min_reader_index) {
+                    min_reader_index = reader_index;
+                }
+            }
+            min_read_cache_ = min_reader_index;
         }
+
+        // Queue is full
+        if (current_write - min_read_cache_ >= BufSize) return false;
 
         // Write data to the buffer
         buffer_[current_write & MASK] = std::forward<U>(u);
@@ -65,7 +71,8 @@ class SPMC<T, BufSize, MaxReaderNum, trans::broadcast> {
     }
 
     template <typename U>
-    bool do_push_overwrite(U&& u) noexcept {
+        requires std::constructible_from<T, U&&>
+    bool push_overwrite(U&& u) noexcept {
         size_t current_write = write_pos_.load(std::memory_order_relaxed);
 
         // Overwrite data in the buffer
@@ -77,30 +84,18 @@ class SPMC<T, BufSize, MaxReaderNum, trans::broadcast> {
         return true;
     }
 
-   public:
-    // Push method for lvalue references
-    bool push(const T& t) noexcept { return do_push(t); }
-    // Push method for rvalue references
-    bool push(T&& t) noexcept { return do_push(std::move(t)); }
-
-    // Push method for lvalue references with overwrite
-    bool push_overwrite(const T& t) noexcept { return do_push_overwrite(t); }
-    // Push method for rvalue references with overwrite
-    bool push_overwrite(T&& t) noexcept { return do_push_overwrite(std::move(t)); }
-
     // Pop method
     std::optional<T> pop(size_t consumerId) noexcept {
-        // attention, consumerId must < MaxReaderNum
+        // attention, consumerId must < MaxReaders
         size_t current_read = read_positions_[consumerId].load(std::memory_order_relaxed);
         size_t current_write = write_pos_.load(std::memory_order_acquire);
 
-        // Check if there's data to read
-        if (current_read >= current_write) {
-            return std::nullopt;  // Queue is empty
-        }
+        // Check if there's data to read, Queue is empty
+        if (current_read >= current_write) return std::nullopt;
 
         // Read data and update reader index
-        T value = std::move(buffer_[current_read & MASK]);
+        // as there are many reader, it cannot use std::move()
+        T value = buffer_[current_read & MASK];
         read_positions_[consumerId].store(current_read + 1, std::memory_order_release);
         return value;
     }
@@ -118,13 +113,10 @@ class SPMC<T, BufSize, MaxReaderNum, trans::broadcast> {
             return std::nullopt;  // Indicate data loss
         }
 
-        // Check if there's data to read
-        if (current_read >= current_write) {
-            return std::nullopt;  // Queue is empty
-        }
-
+        // Check if there's data to read, Queue is empty
+        if (current_read >= current_write) return std::nullopt;
         // Read data and update reader index
-        T value = std::move(buffer_[current_read & MASK]);
+        T value = buffer_[current_read & MASK];
         read_positions_[consumerId].store(current_read + 1, std::memory_order_release);
         return value;
     }
@@ -147,10 +139,9 @@ class SPMC<T, BufSize, MaxReaderNum, trans::broadcast> {
 };
 
 // Specialization for trans::unicast
-template <typename T, size_t BufSize, size_t MaxReaderNum>
-class SPMC<T, BufSize, MaxReaderNum, trans::unicast> {
-    static_assert(BufSize >= 2, "Queue size must be at least 2");
-    static_assert((BufSize & (BufSize - 1)) == 0, "Queue size must be a power of 2 for efficient modulo operations");
+template <typename T, size_t BufSize, size_t MaxReaders>
+    requires(BufSize >= 2) && ((BufSize & (BufSize - 1)) == 0)
+class SPMC<T, BufSize, MaxReaders, trans::unicast> {
     static constexpr size_t MASK = BufSize - 1;
 
     std::array<T, BufSize> buffer_{};
@@ -168,9 +159,9 @@ class SPMC<T, BufSize, MaxReaderNum, trans::unicast> {
     SPMC(SPMC&&) = delete;
     SPMC& operator=(SPMC&&) = delete;
 
-   private:
     template <typename U>
-    bool do_push(U&& u) noexcept {
+        requires std::constructible_from<T, U&&>
+    bool push(U&& u) noexcept {
         size_t current_write = write_pos_.load(std::memory_order_relaxed);
         size_t current_read = read_pos_.load(std::memory_order_acquire);
 
@@ -188,12 +179,6 @@ class SPMC<T, BufSize, MaxReaderNum, trans::unicast> {
         return true;
     }
 
-   public:
-    // Push method for lvalue references
-    bool push(const T& t) noexcept { return do_push(t); }
-
-    // Push method for rvalue references
-    bool push(T&& t) noexcept { return do_push(std::move(t)); }
     // Pop method
     std::optional<T> pop() noexcept {
         size_t current_read;
