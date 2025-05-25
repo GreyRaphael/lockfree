@@ -3,6 +3,7 @@
 #include <atomic>
 #include <cstddef>
 #include <optional>
+#include <utility>
 
 namespace lockfree {
 template <typename T, size_t BufSize>
@@ -32,9 +33,8 @@ class SPSC {
         size_t current_write = write_pos_.load(std::memory_order_relaxed);
         size_t current_read = read_pos_.load(std::memory_order_acquire);
 
-        if (current_write - current_read >= BufSize) {
-            return false;  // Queue is full
-        }
+        // Queue is full
+        if (current_write - current_read >= BufSize) return false;
 
         // Write data to the buffer
         buffer_[current_write & MASK] = std::forward<U>(u);
@@ -57,17 +57,33 @@ class SPSC {
         size_t current_read = read_pos_.load(std::memory_order_relaxed);
         size_t current_write = write_pos_.load(std::memory_order_acquire);
 
-        if (current_read >= current_write) {
-            return std::nullopt;  // Queue is empty
-        }
+        // Queue is empty
+        if (current_read >= current_write) return std::nullopt;
 
-        // Read the item from the buffer
-        T value = std::move(buffer_[current_read & MASK]);
+        // Read the item from the buffer, construct the optional directly around the moved value
+        std::optional<T> value{std::in_place, std::move(buffer_[current_read & MASK])};
 
         // Update the read position
         read_pos_.store(current_read + 1, std::memory_order_release);
 
         return value;
+    }
+
+    // Non-allocating pop method
+    bool pop(T& out) noexcept {
+        size_t current_read = read_pos_.load(std::memory_order_relaxed);
+        size_t current_write = write_pos_.load(std::memory_order_acquire);
+
+        // Queue is empty
+        if (current_read >= current_write) return false;
+
+        // Move the item to the output parameter
+        out = std::move(buffer_[current_read & MASK]);
+
+        // Update the read position
+        read_pos_.store(current_read + 1, std::memory_order_release);
+
+        return true;
     }
 };
 }  // namespace lockfree
