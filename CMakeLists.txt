@@ -8,7 +8,7 @@ set(CMAKE_TOOLCHAIN_FILE
 
 project(lockfree VERSION 0.1.0 LANGUAGES C CXX)
 
-set(CMAKE_CXX_STANDARD 20)
+set(CMAKE_CXX_STANDARD 23)
 
 # Option to build tests
 option(BUILD_TESTS "Build test programs" ON)
@@ -65,15 +65,15 @@ if(BUILD_EXAMPLES)
     target_include_directories(ws_sub PRIVATE include)
     target_link_libraries(ws_sub PRIVATE hv_static)
 
-    # example websocket pub & sub with flatbuffers
-    find_package(flatbuffers CONFIG REQUIRED)
-    add_executable(wsfb_pub examples/wsfb/pub.cpp)
-    target_include_directories(wsfb_pub PRIVATE include)
-    target_link_libraries(wsfb_pub PRIVATE hv_static)
-    target_link_libraries(wsfb_pub PRIVATE flatbuffers::flatbuffers)
+    # # example websocket pub & sub with flatbuffers
+    # find_package(flatbuffers CONFIG REQUIRED)
+    # add_executable(wsfb_pub examples/wsfb/pub.cpp)
+    # target_include_directories(wsfb_pub PRIVATE include)
+    # target_link_libraries(wsfb_pub PRIVATE hv_static)
+    # target_link_libraries(wsfb_pub PRIVATE flatbuffers::flatbuffers)
 
-    add_executable(wsfb_sub examples/wsfb/sub.cpp)
-    target_include_directories(wsfb_sub PRIVATE include)
-    target_link_libraries(wsfb_sub PRIVATE hv_static)
-    target_link_libraries(wsfb_sub PRIVATE flatbuffers::flatbuffers)
+    # add_executable(wsfb_sub examples/wsfb/sub.cpp)
+    # target_include_directories(wsfb_sub PRIVATE include)
+    # target_link_libraries(wsfb_sub PRIVATE hv_static)
+    # target_link_libraries(wsfb_sub PRIVATE flatbuffers::flatbuffers)
 endif()
