@@ -40,7 +40,7 @@ class SPSC {
         size_t synced_read = read_pos_.load(std::memory_order_acquire);
 
         // Queue is full
-        if (local_write_ - synced_read >= BufSize) return false;
+        if (local_write_ >= synced_read + BufSize) return false;
 
         // Write data to the buffer, construct-in-place / assign
         buffer_[local_write_ & MASK] = std::forward<U>(u);
