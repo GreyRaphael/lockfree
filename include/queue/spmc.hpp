@@ -5,6 +5,7 @@
 #include <cstddef>
 #include <optional>
 #include <thread>
+#include <utility>
 
 #include "def.hpp"
 
@@ -39,7 +40,7 @@ class SPMC<T, BufSize, MaxReaders, trans::broadcast> {
     SPMC& operator=(SPMC&&) = delete;
 
     template <typename U>
-        requires std::constructible_from<T, U&&>
+        requires std::constructible_from<T, U&&>  // U&& to T
     bool push(U&& u) noexcept {
         size_t current_write = write_pos_.load(std::memory_order_relaxed);
 
@@ -69,7 +70,7 @@ class SPMC<T, BufSize, MaxReaders, trans::broadcast> {
 
     template <typename U>
         requires std::constructible_from<T, U&&>
-    bool push_overwrite(U&& u) noexcept {
+    void push_overwrite(U&& u) noexcept {
         size_t current_write = write_pos_.load(std::memory_order_relaxed);
 
         // Overwrite data in the buffer
@@ -77,8 +78,6 @@ class SPMC<T, BufSize, MaxReaders, trans::broadcast> {
 
         // Update the writer index with release semantics
         write_pos_.store(current_write + 1, std::memory_order_release);
-
-        return true;
     }
 
     // Pop method
@@ -92,9 +91,21 @@ class SPMC<T, BufSize, MaxReaders, trans::broadcast> {
 
         // Read data and update reader index
         // as there are many reader, it cannot use std::move()
-        T value = buffer_[current_read & MASK];
+        T& slot = buffer_[current_read & MASK];
         read_positions_[consumerId].store(current_read + 1, std::memory_order_release);
-        return value;
+        return std::optional<T>{std::in_place, slot};
+    }
+
+    bool pop(size_t consumerId, T& out) noexcept {
+        size_t current_read = read_positions_[consumerId].load(std::memory_order_relaxed);
+        size_t current_write = write_pos_.load(std::memory_order_acquire);
+
+        // Check if there's data to read, Queue is empty
+        if (current_read >= current_write) return false;
+
+        out = buffer_[current_read & MASK];
+        read_positions_[consumerId].store(current_read + 1, std::memory_order_release);
+        return true;
     }
 
     // Pop method with overwrite
@@ -113,9 +124,29 @@ class SPMC<T, BufSize, MaxReaders, trans::broadcast> {
         // Check if there's data to read, Queue is empty
         if (current_read >= current_write) return std::nullopt;
         // Read data and update reader index
-        T value = buffer_[current_read & MASK];
+        T& slot = buffer_[current_read & MASK];
         read_positions_[consumerId].store(current_read + 1, std::memory_order_release);
-        return value;
+        return std::optional<T>{std::in_place, slot};
+    }
+
+    bool pop_overwrite(size_t consumerId, T& out) noexcept {
+        size_t current_read = read_positions_[consumerId].load(std::memory_order_relaxed);
+        size_t current_write = write_pos_.load(std::memory_order_acquire);
+
+        // Check if the consumer has missed data
+        if (current_write > current_read + BufSize) {
+            // Data has been overwritten
+            current_read = current_write - BufSize;
+            read_positions_[consumerId].store(current_read, std::memory_order_release);
+            return false;  // Indicate data loss
+        }
+
+        // Check if there's data to read, Queue is empty
+        if (current_read >= current_write) return false;
+        // Read data and update reader index
+        out = buffer_[current_read & MASK];
+        read_positions_[consumerId].store(current_read + 1, std::memory_order_release);
+        return true;
     }
 
     size_t get_read_pos(size_t consumerId) noexcept {

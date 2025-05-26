@@ -80,12 +80,8 @@ int main(int argc, char** argv) {
             myData.value = index * 0.1;
             snprintf(myData.msg, sizeof(myData.msg), "Data%zu", index);
 
-            // Attempt to push data into the ring buffer
-            // while (!queue.push(myData)) {
-            while (!queue.push_overwrite(myData)) {
-                std::cout << "Queue is full, cannot push. Retrying...\n";
-                std::this_thread::sleep_for(std::chrono::milliseconds(100));
-            }
+            // force to push data into the ring buffer
+            queue.push_overwrite(myData);
 
             std::cout << std::format("Writer wrote: id={}, value={:.2f}, msg={}\n", myData.id, myData.value, myData.msg);
             ++index;
@@ -116,7 +112,7 @@ int main(int argc, char** argv) {
 
             // all not has_data
             if (!all_has_data) {
-                std::this_thread::sleep_for(std::chrono::milliseconds(10)); // should smaller than writer interval
+                std::this_thread::sleep_for(std::chrono::milliseconds(10));  // should smaller than writer interval
             }
         }
     }};
