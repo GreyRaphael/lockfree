@@ -80,7 +80,7 @@ class SharedMemory {
     SharedMemory(const SharedMemory&) = delete;
     SharedMemory& operator=(const SharedMemory&) = delete;
 
-    [[nodiscard]] void* get() const noexcept { return ptr_; }
+    [[nodiscard]] void* ptr() const noexcept { return ptr_; }
 
     void close() noexcept {
         if (ptr_) {

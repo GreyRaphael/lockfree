@@ -3,6 +3,7 @@
 #include <csignal>
 #include <format>
 #include <iostream>
+#include <memory>
 #include <thread>
 
 #include "queue/spmc.hpp"
@@ -49,9 +50,20 @@ int main(int argc, char const *argv[]) {
     static_assert(std::is_trivially_copyable<T>::value, "RingBuffer requires a trivially copyable type");
 
     auto shm_size = sizeof(lockfree::SPMC<T, BUFFER_CAPACITY, MAX_READERS, lockfree::trans::broadcast>);
-    auto shm = SharedMemory("my_ring", shm_size, false);
-    auto shm_ptr = shm.ptr();
-    auto ringBuffer = static_cast<lockfree::SPMC<T, BUFFER_CAPACITY, MAX_READERS, lockfree::trans::broadcast> *>(shm_ptr);
+
+    static constexpr auto RETRY_INTERVAL = std::chrono::milliseconds(100);
+    std::unique_ptr<SharedMemory> shm;
+    while (running.load(std::memory_order_relaxed)) {
+        try {
+            shm = std::make_unique<SharedMemory>("my_ring", shm_size, false);
+            break;
+        } catch (const std::system_error &e) {
+            // shm_open failed because nobody has created it yet
+            std::this_thread::sleep_for(RETRY_INTERVAL);
+        }
+    }
+
+    auto ringBuffer = static_cast<lockfree::SPMC<T, BUFFER_CAPACITY, MAX_READERS, lockfree::trans::broadcast> *>(shm->ptr());
 
     // Start recving data from the ring buffer
     while (running.load(std::memory_order_relaxed)) {
@@ -69,5 +81,5 @@ int main(int argc, char const *argv[]) {
     }
 
     // gracefully close without destroy the shared memory by signal
-    shm.close();
+    shm->close();
 }

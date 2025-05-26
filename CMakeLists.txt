@@ -56,6 +56,12 @@ if(BUILD_EXAMPLES)
     add_executable(shm_sub examples/shm/sub.cpp)
     target_include_directories(shm_sub PRIVATE include)
 
+    # example shm pub & sub
+    add_executable(shmrev_pub examples/shmrev/pub.cpp)
+    target_include_directories(shmrev_pub PRIVATE include)
+    add_executable(shmrev_sub examples/shmrev/sub.cpp)
+    target_include_directories(shmrev_sub PRIVATE include)
+
     # example websocket pub & sub
     find_package(libhv CONFIG REQUIRED)
     add_executable(ws_pub examples/ws/pub.cpp)
