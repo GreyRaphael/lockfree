@@ -81,8 +81,6 @@ class SharedMemory {
     SharedMemory& operator=(const SharedMemory&) = delete;
 
     [[nodiscard]] void* get() const noexcept { return ptr_; }
-    [[nodiscard]] std::size_t size() const noexcept { return size_; }
-    [[nodiscard]] const std::string& name() const noexcept { return name_; }
 
     void close() noexcept {
         if (ptr_) {
