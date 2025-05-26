@@ -4,10 +4,10 @@ lockfree queue for C++20 and above
 
 ## Todo
 
-- [x] SPSC
-- [x] SPMC
-- [] MPSC
-- [] MPMC
+- [x] SPSC optimization
+- [x] SPMC optimization
+- [] MPSC optimization
+- [] MPMC optimization
 
 ## Requirements
 
