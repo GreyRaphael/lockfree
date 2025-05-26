@@ -10,15 +10,13 @@
 
 namespace lockfree {
 
-static constexpr size_t UPDATE_INTERVAL = 64;
-
 // Create the general template
 template <typename T, size_t BufSize, size_t MaxReaders, trans Ts>
 class SPMC;
 
 // Specialization for trans::broadcast
 template <typename T, size_t BufSize, size_t MaxReaders>
-    requires(BufSize > UPDATE_INTERVAL) && ((BufSize & (BufSize - 1)) == 0) && (MaxReaders >= 1)
+    requires((BufSize & (BufSize - 1)) == 0) && (MaxReaders >= 1)
 class SPMC<T, BufSize, MaxReaders, trans::broadcast> {
     static constexpr size_t MASK = BufSize - 1;
 
@@ -44,21 +42,20 @@ class SPMC<T, BufSize, MaxReaders, trans::broadcast> {
         requires std::constructible_from<T, U&&>
     bool push(U&& u) noexcept {
         size_t current_write = write_pos_.load(std::memory_order_relaxed);
-        // occasionally refresh min_read_cache_
-        if ((current_write & (UPDATE_INTERVAL - 1)) == 0) {
+
+        // Fast-path: if our cached min_reader would overflow, do a full refresh
+        if (current_write >= min_read_cache_ + BufSize) {
             // Get the minimum reader index to determine how much the buffer has been consumed
-            size_t min_reader_index = SIZE_MAX;
+            size_t fresh_min = SIZE_MAX;
             for (size_t i = 0; i < MaxReaders; ++i) {
                 size_t reader_index = read_positions_[i].load(std::memory_order_acquire);
-                if (reader_index < min_reader_index) {
-                    min_reader_index = reader_index;
-                }
+                if (reader_index < fresh_min) fresh_min = reader_index;
             }
-            min_read_cache_ = min_reader_index;
-        }
+            min_read_cache_ = fresh_min;
 
-        // Queue is full
-        if (current_write - min_read_cache_ >= BufSize) return false;
+            // If it’s still full, bail out immediately
+            if (current_write >= min_read_cache_ + BufSize) return false;
+        }
 
         // Write data to the buffer
         buffer_[current_write & MASK] = std::forward<U>(u);
@@ -106,9 +103,9 @@ class SPMC<T, BufSize, MaxReaders, trans::broadcast> {
         size_t current_write = write_pos_.load(std::memory_order_acquire);
 
         // Check if the consumer has missed data
-        if (current_read + BufSize <= current_write) {
+        if (current_write > current_read + BufSize) {
             // Data has been overwritten
-            current_read = current_write - BufSize + 1;
+            current_read = current_write - BufSize;
             read_positions_[consumerId].store(current_read, std::memory_order_release);
             return std::nullopt;  // Indicate data loss
         }
@@ -165,7 +162,7 @@ class SPMC<T, BufSize, MaxReaders, trans::unicast> {
         size_t current_write = write_pos_.load(std::memory_order_relaxed);
         size_t current_read = read_pos_.load(std::memory_order_acquire);
 
-        if (current_write - current_read >= BufSize) {
+        if (current_write >= current_read + BufSize) {
             return false;  // Queue is full
         }
 
