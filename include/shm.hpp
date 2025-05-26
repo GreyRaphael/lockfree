@@ -1,160 +1,127 @@
 #pragma once
 
-#include <cstddef>
-#include <cstring>
-#include <string>
-#ifdef _WIN32
-#include <windows.h>
-#else
 #include <fcntl.h>
 #include <sys/mman.h>
 #include <unistd.h>
-#endif
+
+#include <cerrno>
+#include <cstring>
 #include <stdexcept>
+#include <string>
+#include <system_error>
 
 class SharedMemory {
-    void* ptr_;
-    size_t size_;
-    std::string name_;
-#ifdef _WIN32
-    HANDLE hMapFile_;
-#else
-    int fd_;
-#endif
    public:
     /**
-     * @brief Constructs a SharedMemory object, creating or opening a shared memory segment.
-     * @param name The name of the shared memory segment.
-     * @param size The size of the shared memory segment.
-     * @param create If true, creates a new shared memory segment; otherwise, opens an existing one.
+     * @param name   Name of the POSIX-shared-memory object (with or without leading '/').
+     * @param size   Size in bytes.
+     * @param create If true, creates (and truncates) the segment; otherwise opens existing.
+     * @throws std::system_error on any failure.
      */
-    SharedMemory(std::string name, size_t size, bool create = true)
-        : ptr_(nullptr), size_(size), name_(std::move(name)) {
-#ifdef _WIN32
-        if (create) {
-            hMapFile_ = CreateFileMapping(
-                INVALID_HANDLE_VALUE,  // Use paging file
-                NULL,                  // Default security
-                PAGE_READWRITE,        // Read/write access
-                0,                     // Maximum object size (high-order DWORD)
-                size,                  // Maximum object size (low-order DWORD)
-                name_.c_str());        // Name of mapping object
-
-            if (hMapFile_ == NULL) {
-                throw std::runtime_error("Could not create file mapping object (" + std::to_string(GetLastError()) + ").");
-            }
-        } else {
-            hMapFile_ = OpenFileMapping(
-                FILE_MAP_ALL_ACCESS,  // Read/write access
-                FALSE,                // Do not inherit the name
-                name_.c_str());       // Name of mapping object
-
-            if (hMapFile_ == NULL) {
-                throw std::runtime_error("Could not open file mapping object (" + std::to_string(GetLastError()) + ").");
-            }
-        }
-
-        ptr_ = MapViewOfFile(
-            hMapFile_,            // Handle to map object
-            FILE_MAP_ALL_ACCESS,  // Read/write permission
-            0,
-            0,
-            size_);
-
-        if (ptr_ == NULL) {
-            CloseHandle(hMapFile_);
-            throw std::runtime_error("Could not map view of file (" + std::to_string(GetLastError()) + ").");
-        }
-#else
-        if (create) {
-            fd_ = shm_open(name_.c_str(), O_CREAT | O_RDWR, 0666);
-            if (fd_ == -1) {
-                throw std::runtime_error("shm_open failed: " + std::string(strerror(errno)));
-            }
-
-            if (ftruncate(fd_, size_) == -1) {
-                ::close(fd_);
-                shm_unlink(name_.c_str());
-                throw std::runtime_error("ftruncate failed: " + std::string(strerror(errno)));
-            }
-        } else {
-            fd_ = shm_open(name_.c_str(), O_RDWR, 0666);
-            if (fd_ == -1) {
-                throw std::runtime_error("shm_open failed: " + std::string(strerror(errno)));
-            }
-        }
-
-        ptr_ = mmap(NULL, size_, PROT_READ | PROT_WRITE, MAP_SHARED, fd_, 0);
-        if (ptr_ == MAP_FAILED) {
-            ::close(fd_);
-            if (create) {
-                shm_unlink(name_.c_str());
-            }
-            throw std::runtime_error("mmap failed: " + std::string(strerror(errno)));
-        }
-
-        ::close(fd_);  // File descriptor is no longer needed
-        fd_ = -1;      // Invalidate file descriptor
-#endif
+    SharedMemory(std::string_view name, std::size_t size, bool create = true)
+        : name_{normalize_name(name)}, size_{size} {
+        open_or_create(create);
+        map();
+        // once mapped, we can close the fd
+        ::close(fd_);
+        fd_ = -1;
     }
 
-    /**
-     * @brief Destructor that ensures resources are properly released.
-     */
-    ~SharedMemory() { close(); }
+    ~SharedMemory() noexcept {
+        // best-effort cleanup
+        try {
+            close();
+        } catch (...) {
+        }
+    }
 
-    // Disable copy constructor and assignment operator
+    SharedMemory(SharedMemory&& o) noexcept
+        : ptr_{o.ptr_}, size_{o.size_}, name_{std::move(o.name_)}, fd_{o.fd_} {
+        o.ptr_ = nullptr;
+        o.fd_ = -1;
+        o.size_ = 0;
+    }
+
+    SharedMemory& operator=(SharedMemory&& o) noexcept {
+        if (this != &o) {
+            close();
+            ptr_ = o.ptr_;
+            size_ = o.size_;
+            name_ = std::move(o.name_);
+            fd_ = o.fd_;
+            o.ptr_ = nullptr;
+            o.fd_ = -1;
+            o.size_ = 0;
+        }
+        return *this;
+    }
+
     SharedMemory(const SharedMemory&) = delete;
     SharedMemory& operator=(const SharedMemory&) = delete;
 
-    /**
-     * @brief Gets a pointer to the shared memory.
-     * @return Pointer to the shared memory.
-     */
-    void* get() const { return ptr_; }
+    [[nodiscard]] void* get() const noexcept { return ptr_; }
+    [[nodiscard]] std::size_t size() const noexcept { return size_; }
+    [[nodiscard]] const std::string& name() const noexcept { return name_; }
 
-    /**
-     * @brief Gets the size of the shared memory.
-     * @return Size of the shared memory.
-     */
-    size_t size() const { return size_; }
-
-    /**
-     * @brief Gets the name of the shared memory segment.
-     * @return Name of the shared memory segment.
-     */
-    const std::string& name() const { return name_; }
-
-    /**
-     * @brief Closes the shared memory mapping without destroying it.
-     */
-    void close() {
+    /// Unmaps the region; does not unlink.
+    void close() noexcept {
         if (ptr_) {
-#ifdef _WIN32
-            UnmapViewOfFile(ptr_);
-            ptr_ = nullptr;
-
-            if (hMapFile_ != NULL) {
-                CloseHandle(hMapFile_);
-                hMapFile_ = NULL;
-            }
-#else
             munmap(ptr_, size_);
             ptr_ = nullptr;
-#endif
         }
     }
 
-    /**
-     * @brief Destroys the shared memory object.
-     */
+    /// Closes and unlinks the shared‐memory object.
     void destroy() {
-#ifdef _WIN32
-        // No equivalent of shm_unlink is needed on Windows; just close the handles
         close();
-#else
-        close();
-        shm_unlink(name_.c_str());
-#endif
+        if (!name_.empty()) {
+            shm_unlink(name_.c_str());
+        }
+    }
+
+   private:
+    void* ptr_ = nullptr;
+    std::size_t size_ = 0;
+    std::string name_;
+    int fd_ = -1;
+
+    static std::string normalize_name(std::string_view raw) {
+        if (raw.empty())
+            throw std::invalid_argument("SharedMemory name must not be empty");
+        std::string s{raw};
+        if (s.front() != '/')
+            s.insert(s.begin(), '/');
+        return s;
+    }
+
+    void open_or_create(bool create) {
+        int flags = O_RDWR;
+        if (create) flags |= O_CREAT | O_TRUNC;
+        // mode 0666: rw for owner, group, others
+        fd_ = shm_open(name_.c_str(), flags, 0666);
+        if (fd_ < 0)
+            throw std::system_error(errno, std::generic_category(), "shm_open('" + name_ + "') failed");
+        if (create) {
+            if (ftruncate(fd_, static_cast<off_t>(size_)) < 0) {
+                int saved = errno;
+                ::close(fd_);
+                shm_unlink(name_.c_str());
+                throw std::system_error(saved, std::generic_category(), "ftruncate('" + name_ + "') failed");
+            }
+        }
+    }
+
+    void map() {
+        ptr_ = mmap(nullptr,
+                    size_,
+                    PROT_READ | PROT_WRITE,
+                    MAP_SHARED,
+                    fd_,
+                    0);
+        if (ptr_ == MAP_FAILED) {
+            int saved = errno;
+            ::close(fd_);
+            throw std::system_error(saved, std::generic_category(), "mmap('" + name_ + "') failed");
+        }
     }
 };
