@@ -2,6 +2,13 @@
 
 lockfree queue for C++20 and above
 
+## Todo
+
+- [x] SPSC
+- [x] SPMC
+- [] MPSC
+- [] MPMC
+
 ## Requirements
 
 `vcpkg install doctest`
