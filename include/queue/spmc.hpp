@@ -17,7 +17,7 @@ class SPMC;
 
 // Specialization for trans::broadcast
 template <typename T, size_t BufSize, size_t MaxReaders>
-    requires((BufSize & (BufSize - 1)) == 0) && (MaxReaders >= 1)
+    requires(BufSize >= 2) && ((BufSize & (BufSize - 1)) == 0) && (MaxReaders >= 1)
 class SPMC<T, BufSize, MaxReaders, trans::broadcast> {
     static constexpr size_t MASK = BufSize - 1;
 
@@ -193,9 +193,8 @@ class SPMC<T, BufSize, MaxReaders, trans::unicast> {
         size_t current_write = write_pos_.load(std::memory_order_relaxed);
         size_t current_read = read_pos_.load(std::memory_order_acquire);
 
-        if (current_write >= current_read + BufSize) {
-            return false;  // Queue is full
-        }
+        // Queue is full
+        if (current_write >= current_read + BufSize) return false;
 
         // Write data to the buffer
         buffer_[current_write & MASK] = std::forward<U>(u);
@@ -215,9 +214,8 @@ class SPMC<T, BufSize, MaxReaders, trans::unicast> {
         while (true) {
             current_read = read_pos_.load(std::memory_order_relaxed);
             current_write = write_pos_.load(std::memory_order_acquire);
-            if (current_read >= current_write) {
-                return std::nullopt;  // Queue is empty
-            }
+            // Queue is empty
+            if (current_read >= current_write) return std::nullopt;
 
             if (read_pos_.compare_exchange_weak(
                     current_read,
@@ -225,8 +223,31 @@ class SPMC<T, BufSize, MaxReaders, trans::unicast> {
                     std::memory_order_acq_rel,
                     std::memory_order_relaxed)) {
                 // Beat other consumers to  Successfully claimed the item at current_read
-                T item = std::move(buffer_[current_read & MASK]);
-                return item;
+                return std::optional<T>{std::in_place, std::move(buffer_[current_read & MASK])};
+            }
+            std::this_thread::yield();
+        }
+    }
+
+    // Pop method without allocating
+    bool pop(T& out) noexcept {
+        size_t current_read;
+        size_t current_write;
+        // Attempt to claim the next item in the buffer
+        while (true) {
+            current_read = read_pos_.load(std::memory_order_relaxed);
+            current_write = write_pos_.load(std::memory_order_acquire);
+            // Queue is empty
+            if (current_read >= current_write) return false;
+
+            if (read_pos_.compare_exchange_weak(
+                    current_read,
+                    current_read + 1,
+                    std::memory_order_acq_rel,
+                    std::memory_order_relaxed)) {
+                // Beat other consumers to  Successfully claimed the item at current_read
+                out = std::move(buffer_[current_read & MASK]);
+                return true;
             }
             std::this_thread::yield();
         }
