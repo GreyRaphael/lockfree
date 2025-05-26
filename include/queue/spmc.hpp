@@ -225,6 +225,7 @@ class SPMC<T, BufSize, MaxReaders, trans::unicast> {
                 // Beat other consumers to  Successfully claimed the item at current_read
                 return std::optional<T>{std::in_place, std::move(buffer_[current_read & MASK])};
             }
+            // to avoid a tight, CPU-wasting spin and to give other threads (producer or competing consumers) a chance to make progress whenever your CAS fails.
             std::this_thread::yield();
         }
     }
