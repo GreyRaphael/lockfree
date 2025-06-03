@@ -1,6 +1,7 @@
 #pragma once
 #include <array>
 #include <atomic>
+#include <concepts>
 #include <cstddef>
 #include <optional>
 #include <thread>
@@ -8,9 +9,8 @@
 namespace lockfree {
 
 template <typename T, size_t BufSize>
+    requires(BufSize >= 2) && ((BufSize & (BufSize - 1)) == 0)
 class MPSC {
-    static_assert(BufSize >= 2, "Queue size must be at least 2");
-    static_assert((BufSize & (BufSize - 1)) == 0, "Queue size must be a power of 2 for efficient modulo operations");
     static constexpr size_t MASK = BufSize - 1;
 
     std::array<T, BufSize> buffer_{};
@@ -28,16 +28,16 @@ class MPSC {
     MPSC(MPSC&&) = delete;
     MPSC& operator=(MPSC&&) = delete;
 
-   private:
+   public:
     template <typename U>
-    bool do_push(U&& u) noexcept {
+        requires std::constructible_from<T, U&&>
+    bool push(U&& u) noexcept {
         while (true) {
             size_t current_write = write_pos_.load(std::memory_order_relaxed);
             size_t current_read = read_pos_.load(std::memory_order_acquire);
 
-            if (current_write - current_read >= BufSize) {
-                return false;  // Queue is full
-            }
+            // Check if the queue is full
+            if (current_write - current_read >= BufSize) return false;
 
             // Attempt to reserve the current_write position
             if (write_pos_.compare_exchange_weak(
@@ -55,20 +55,13 @@ class MPSC {
         }
     }
 
-   public:
-    // Push method for lvalue references
-    bool push(const T& t) noexcept { return do_push(t); }
-
-    // Push method for rvalue references
-    bool push(T&& t) noexcept { return do_push(std::move(t)); }
     // Pop method
     std::optional<T> pop() noexcept {
         size_t current_read = read_pos_.load(std::memory_order_relaxed);
         size_t current_write = write_pos_.load(std::memory_order_acquire);
 
-        if (current_read >= current_write) {
-            return std::nullopt;  // Queue is empty
-        }
+        // Check if the queue is empty
+        if (current_read >= current_write) return std::nullopt;
 
         // Read the item from the buffer
         T value = std::move(buffer_[current_read & MASK]);
